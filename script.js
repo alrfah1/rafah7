@@ -1,920 +1,1303 @@
-// استيراد المكتبات المطلوبة من Firebase Realtime Database
-import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-app.js";
-import { getDatabase, ref, set, get, child, update, remove, onValue } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-database.js";
-
-// إعدادات Firebase الخاصة بالمشروع
-const firebaseConfig = {
-  apiKey: "AIzaSyDUDHGhGdM-jcNYnS9tZJuFnYJxcuv8E9o",
-  authDomain: "al-rafah-system.firebaseapp.com",
-  databaseURL: "https://al-rafah-system-default-rtdb.firebaseio.com",
-  projectId: "al-rafah-system",
-  storageBucket: "al-rafah-system.firebasestorage.app",
-  messagingSenderId: "12037502402",
-  appId: "1:12037502402:web:f68fc375275879942f125b",
-  measurementId: "G-7TBZFQT2QS"
-};
-
-// تهيئة Firebase
-const app = initializeApp(firebaseConfig);
-const db = getDatabase(app);
-
-// كائنات التخزين المحلي والذاكرة المؤقتة لمزامنة قاعدة البيانات
-let appState = {
-  activeUser: null,
-  config: { exUSDToTRY: 32.50, exUSDToSYP: 14850 },
-  transactions: {},
-  customers: {},
-  customerLedgers: {},
-  activityLogs: {},
-  offices: {}
-};
-
-// تهيئة الحساب الافتراضي للمسؤول (Admin)
-const defaultAdmin = {
-  id: "admin-root",
-  officeName: "الإدارة العامة",
-  managerName: "المدير العام",
-  username: "admin",
-  password: "123",
-  isAdmin: true,
-  validFromMonth: 1, validFromYear: 2026,
-  validToMonth: 12, validToYear: 2030
-};
-
-// دالة البدء الرئيسية لمزامنة البيانات سحابياً
-function initializeSyncAndListen() {
-  const rootRef = ref(db);
-  
-  onValue(rootRef, (snapshot) => {
-    if (snapshot.exists()) {
-      const serverData = snapshot.val();
-      appState.config = serverData.config || { exUSDToTRY: 32.50, exUSDToSYP: 14850 };
-      appState.transactions = serverData.transactions || {};
-      appState.customers = serverData.customers || {};
-      appState.customerLedgers = serverData.customerLedgers || {};
-      appState.activityLogs = serverData.activityLogs || {};
-      appState.offices = serverData.offices || {};
-      
-      // التأكد من وجود حساب المسؤول في قائمة المكاتب
-      if (!appState.offices["admin-root"]) {
-        set(ref(db, 'offices/admin-root'), defaultAdmin);
-      }
-    } else {
-      // إعداد قاعدة البيانات لأول مرة
-      set(ref(db, 'offices/admin-root'), defaultAdmin);
-      set(ref(db, 'config'), appState.config);
-    }
-    
-    // تحديث واجهات الاستخدام إذا كان المستخدم مسجلاً دخوله
-    if (appState.activeUser) {
-      updateUIElements();
-    }
-  });
-}
-
-// تشغيل المزامنة الفورية
-initializeSyncAndListen();
-
-// دوال حفظ البيانات إلى Firebase بدلاً من الذاكرة المحلية
-function syncWrite(path, data) {
-  return set(ref(db, path), data);
-}
-
-function logToActivity(type, description, details) {
-  const logId = "log-" + Date.now();
-  const logObj = {
-    id: logId,
-    timestamp: new Date().toLocaleString("ar-EG"),
-    user: appState.activeUser ? appState.activeUser.username : "غير معروف",
-    type: type,
-    description: description,
-    details: details
-  };
-  syncWrite('activityLogs/' + logId, logObj);
-}
-
-// تبديل التبويبات والصفحات
-window.switchTab = function(tabName) {
-  document.querySelectorAll('.content-section').forEach(el => el.classList.add('hidden'));
-  document.querySelectorAll('.tab-btn').forEach(btn => {
-    btn.classList.remove('active', 'text-brand-600', 'bg-brand-50', 'dark:text-brand-400', 'dark:bg-brand-500/10');
-    btn.classList.add('text-slate-600', 'dark:text-slate-400');
-  });
-  
-  const targetTab = document.getElementById('tab-' + tabName);
-  const targetBtn = document.getElementById('btn-tab-' + tabName);
-  if (targetTab) targetTab.classList.remove('hidden');
-  if (targetBtn) {
-    targetBtn.classList.add('active', 'text-brand-600', 'bg-brand-50', 'dark:text-brand-400', 'dark:bg-brand-500/10');
-  }
-};
-
-// تسجيل الدخول
-document.getElementById('loginForm').addEventListener('submit', (e) => {
-  e.preventDefault();
-  const u = document.getElementById('loginUsername').value.trim();
-  const p = document.getElementById('loginPassword').value.trim();
-  
-  let validUser = null;
-  const currentYear = 2026;
-  const currentMonth = 5;
-
-  // البحث في المكاتب المخزنة سحابياً
-  for (let id in appState.offices) {
-    const office = appState.offices[id];
-    if (office.username === u && office.password === p) {
-      // التحقق من فترة الصلاحية للمكاتب الفرعية
-      if (!office.isAdmin) {
-        if (currentYear < office.validFromYear || (currentYear === office.validFromYear && currentMonth < office.validFromMonth)) {
-          alert("فترة صلاحية حساب هذا المكتب لم تبدأ بعد!");
-          return;
-        }
-        if (currentYear > office.validToYear || (currentYear === office.validToYear && currentMonth > office.validToMonth)) {
-          alert("عذراً، انتهت صلاحية حساب هذا المكتب!");
-          return;
-        }
-      }
-      validUser = office;
-      break;
-    }
-  }
-
-  if (validUser) {
-    appState.activeUser = validUser;
-    document.getElementById('loginSection').classList.add('hidden');
-    document.getElementById('mainApp').classList.remove('hidden');
-    
-    document.getElementById('currentUserBadge').textContent = validUser.officeName;
-    document.getElementById('adminSidebarLinks').classList.toggle('hidden', !validUser.isAdmin);
-    document.getElementById('adminControlsResetArea').classList.toggle('hidden', !validUser.isAdmin);
-    
-    // تعبئة البيانات في شاشات الإعدادات
-    document.getElementById('adminCurrentUsernameInput').value = validUser.username;
-    document.getElementById('adminCurrentPasswordInput').value = validUser.password;
-    
-    document.getElementById('configExUSDToTRY').value = appState.config.exUSDToTRY;
-    document.getElementById('configExUSDToSYP').value = appState.config.exUSDToSYP;
-
-    logToActivity("تسجيل دخول", "المستخدم قام بتسجيل الدخول إلى النظام", validUser.officeName);
-    updateUIElements();
-    switchTab('dashboard');
-  } else {
-    alert("اسم المستخدم أو كلمة المرور خاطئة!");
-  }
-});
-
-// تسجيل الخروج
-window.logout = function() {
-  logToActivity("تسجيل خروج", "المستخدم سجل خروجه", appState.activeUser ? appState.activeUser.officeName : "");
-  appState.activeUser = null;
-  document.getElementById('loginForm').reset();
-  document.getElementById('mainApp').classList.add('hidden');
-  document.getElementById('loginSection').classList.remove('hidden');
-};
-
-// تحديث كافة عناصر واجهة الاستخدام بمجرد جلب البيانات الجديدة من Firebase
-function updateUIElements() {
-  document.getElementById('currentDateTimeDisplay').textContent = new Date().toLocaleString("ar-EG");
-  
-  loadDashboardData();
-  loadTransactions();
-  loadCustomersList();
-  loadOverallReportsSummary();
-  loadOffices();
-  loadActivityLogs();
-}
-
-// ----------------- لوحة التحكم (Dashboard) -----------------
-function loadDashboardData() {
-  let netUSD = 0, netTRY = 0, netSYP = 0;
-  
-  // تجميع الصافي لليوم الحالي فقط
-  const todayDateStr = new Date().toLocaleDateString("ar-EG");
-  
-  Object.values(appState.transactions).forEach(tx => {
-    if (tx.createdAtDay === todayDateStr) {
-      if (tx.currency === "USD") netUSD += Number(tx.netProfit);
-      if (tx.currency === "TRY") netTRY += Number(tx.netProfit);
-      if (tx.currency === "SYP") netSYP += Number(tx.netProfit);
-    }
-  });
-
-  document.getElementById('statNetDayUSD').innerHTML = `${netUSD.toFixed(2)} <span class="text-sm font-medium opacity-70">USD</span>`;
-  document.getElementById('statNetDayTRY').innerHTML = `${netTRY.toFixed(2)} <span class="text-sm font-medium opacity-70">TRY</span>`;
-  document.getElementById('statNetDaySYP').innerHTML = `${netSYP.toFixed(2)} <span class="text-sm font-medium opacity-70">SYP</span>`;
-
-  // تحويل كافة الأرباح اليومية لـ USD لتقديم مجموع عام
-  const convertedTRYToUSD = netTRY / appState.config.exUSDToTRY;
-  const convertedSYPToUSD = netSYP / appState.config.exUSDToSYP;
-  const combinedTotalNetUSD = netUSD + convertedTRYToUSD + convertedSYPToUSD;
-
-  document.getElementById('statNetDayAll').innerHTML = `${combinedTotalNetUSD.toFixed(2)} <span class="text-sm font-medium opacity-70">USD</span>`;
-
-  // ملخص الأرباح لآخر 30 يوم
-  const thirtyDaysTableBody = document.getElementById('statDashboardDaily30List');
-  thirtyDaysTableBody.innerHTML = '';
-  
-  // تجميع الأرباح باليوم
-  let groupedDailyNet = {};
-  Object.values(appState.transactions).forEach(tx => {
-    let conv = 0;
-    if (tx.currency === "USD") conv = Number(tx.netProfit);
-    if (tx.currency === "TRY") conv = Number(tx.netProfit) / appState.config.exUSDToTRY;
-    if (tx.currency === "SYP") conv = Number(tx.netProfit) / appState.config.exUSDToSYP;
-    
-    groupedDailyNet[tx.createdAtDay] = (groupedDailyNet[tx.createdAtDay] || 0) + conv;
-  });
-
-  Object.entries(groupedDailyNet).sort((a,b) => b[0].localeCompare(a[0])).slice(0, 30).forEach(([day, sum]) => {
-    thirtyDaysTableBody.innerHTML += `
-      <tr class="hover:bg-slate-50 dark:hover:bg-slate-800/40 border-b border-slate-100 dark:border-slate-800/60 transition-all">
-        <td class="p-3 font-medium">${day}</td>
-        <td class="p-3 font-bold text-brand-600 dark:text-brand-400">${sum.toFixed(2)} USD</td>
-      </tr>
-    `;
-  });
-
-  // أعلى البائعين ربحية
-  const topSellersTableBody = document.getElementById('statDashboardTopSellersList');
-  topSellersTableBody.innerHTML = '';
-  
-  let sellerMetrics = {};
-  Object.values(appState.transactions).forEach(tx => {
-    let conv = 0;
-    if (tx.currency === "USD") conv = Number(tx.netProfit);
-    if (tx.currency === "TRY") conv = Number(tx.netProfit) / appState.config.exUSDToTRY;
-    if (tx.currency === "SYP") conv = Number(tx.netProfit) / appState.config.exUSDToSYP;
-
-    if (!sellerMetrics[tx.name]) {
-      sellerMetrics[tx.name] = { count: 0, sum: 0 };
-    }
-    sellerMetrics[tx.name].count += 1;
-    sellerMetrics[tx.name].sum += conv;
-  });
-
-  Object.entries(sellerMetrics).sort((a,b) => b[1].sum - a[1].sum).slice(0, 10).forEach(([name, data]) => {
-    topSellersTableBody.innerHTML += `
-      <tr class="hover:bg-slate-50 dark:hover:bg-slate-800/40 border-b border-slate-100 dark:border-slate-800/60 transition-all">
-        <td class="p-3 font-bold text-slate-800 dark:text-slate-200">${name}</td>
-        <td class="p-3 text-slate-500">${data.count} معاملة</td>
-        <td class="p-3 font-bold text-brand-600 dark:text-brand-400">${data.sum.toFixed(2)} USD</td>
-      </tr>
-    `;
-  });
-}
-
-// ----------------- الأرباح والمصروفات (Transactions) -----------------
-window.openTransactionModal = function(txId = '') {
-  document.getElementById('modalTransaction').classList.remove('hidden');
-  const modalTitle = document.getElementById('txModalTitle');
-  const txForm = document.getElementById('txForm');
-  txForm.reset();
-  
-  if (txId && appState.transactions[txId]) {
-    const editObj = appState.transactions[txId];
-    modalTitle.innerHTML = `<i class="fa-solid fa-pen-to-square text-brand-500"></i> تعديل المعاملة المالية`;
-    document.getElementById('txId').value = editObj.id;
-    document.getElementById('txName').value = editObj.name;
-    document.getElementById('txPurchaseAmount').value = editObj.purchaseAmount;
-    document.getElementById('txSellAmount').value = editObj.sellAmount;
-    document.getElementById('txExpenses').value = editObj.expenses;
-    document.getElementById('txCurrency').value = editObj.currency;
-    document.getElementById('liveProfitLabelDisplay').textContent = editObj.netProfit;
-  } else {
-    modalTitle.innerHTML = `<i class="fa-solid fa-cash-register text-brand-500"></i> إضافة عملية جديدة`;
-    document.getElementById('txId').value = '';
-    document.getElementById('liveProfitLabelDisplay').textContent = "0.00";
-  }
-};
-
-window.closeTransactionModal = function() {
-  document.getElementById('modalTransaction').classList.add('hidden');
-};
-
-window.calculateTxProfitLive = function() {
-  const p = Number(document.getElementById('txPurchaseAmount').value) || 0;
-  const s = Number(document.getElementById('txSellAmount').value) || 0;
-  const e = Number(document.getElementById('txExpenses').value) || 0;
-  const net = s - (p + e);
-  document.getElementById('liveProfitLabelDisplay').textContent = net.toFixed(2);
-};
-
-document.getElementById('txForm').addEventListener('submit', (e) => {
-  e.preventDefault();
-  const txId = document.getElementById('txId').value || "tx-" + Date.now();
-  const n = document.getElementById('txName').value.trim();
-  const p = Number(document.getElementById('txPurchaseAmount').value) || 0;
-  const s = Number(document.getElementById('txSellAmount').value) || 0;
-  const exp = Number(document.getElementById('txExpenses').value) || 0;
-  const cur = document.getElementById('txCurrency').value;
-  const net = s - (p + exp);
-
-  const txObj = {
-    id: txId,
-    name: n,
-    purchaseAmount: p,
-    sellAmount: s,
-    expenses: exp,
-    netProfit: net,
-    currency: cur,
-    createdBy: appState.activeUser.officeName,
-    createdAtDay: new Date().toLocaleDateString("ar-EG"),
-    createdAtTime: new Date().toLocaleTimeString("ar-EG")
-  };
-
-  syncWrite('transactions/' + txId, txObj).then(() => {
-    logToActivity("تعديل/إضافة عملية", `تم حفظ المعاملة ${n} بالمبلغ الصافي ${net} ${cur}`, txId);
-    closeTransactionModal();
-  });
-});
-
-window.deleteTransaction = function(txId) {
-  if (confirm("هل أنت متأكد من رغبتك في حذف هذه العملية بشكل نهائي؟")) {
-    remove(ref(db, 'transactions/' + txId)).then(() => {
-      logToActivity("حذف عملية", `تم حذف المعاملة من النظام تماماً`, txId);
-    });
-  }
-};
-
-window.loadTransactions = function() {
-  const txCurrencyFilter = document.getElementById('filterTxCurrency').value;
-  const tableBody = document.getElementById('transactionsList');
-  tableBody.innerHTML = '';
-
-  const txList = Object.values(appState.transactions);
-  if (txList.length === 0) {
-    tableBody.innerHTML = `<tr><td colspan="8" class="p-8 text-center text-slate-400 font-light select-none">📭 لا توجد أي بيانات مدخلة بعد</td></tr>`;
-    return;
-  }
-
-  txList.reverse().forEach(tx => {
-    if (txCurrencyFilter !== "ALL" && tx.currency !== txCurrencyFilter) return;
-
-    tableBody.innerHTML += `
-      <tr class="hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-all border-b border-slate-100 dark:border-slate-800/60">
-        <td class="p-4"><span class="block font-bold text-slate-700 dark:text-slate-300">${tx.createdAtDay}</span><span class="text-[10px] text-slate-400 font-light">${tx.createdAtTime}</span></td>
-        <td class="p-4 font-bold text-slate-900 dark:text-white">${tx.name}</td>
-        <td class="p-4 text-red-600 dark:text-red-400/80 font-medium">${Number(tx.purchaseAmount).toFixed(2)}</td>
-        <td class="p-4 text-emerald-600 dark:text-emerald-400 font-bold">${Number(tx.sellAmount).toFixed(2)}</td>
-        <td class="p-4 text-slate-400 font-light">${Number(tx.expenses).toFixed(2)}</td>
-        <td class="p-4 font-bold ${tx.netProfit >= 0 ? 'text-brand-600' : 'text-rose-600'}">${Number(tx.netProfit).toFixed(2)}</td>
-        <td class="p-4"><span class="px-2 py-1 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 font-bold rounded-lg text-[10px]">${tx.currency}</span></td>
-        <td class="p-4 text-center">
-          <div class="flex items-center justify-center gap-1.5">
-            <button onclick="openTransactionModal('${tx.id}')" class="w-8 h-8 rounded-lg bg-blue-50 hover:bg-blue-100 dark:bg-blue-500/10 dark:hover:bg-blue-500/20 text-blue-600 dark:text-blue-400 flex items-center justify-center transition-all duration-150"><i class="fa-solid fa-pen text-xs"></i></button>
-            <button onclick="deleteTransaction('${tx.id}')" class="w-8 h-8 rounded-lg bg-red-50 hover:bg-red-100 dark:bg-red-500/10 dark:hover:bg-red-500/20 text-red-600 dark:text-red-400 flex items-center justify-center transition-all duration-150"><i class="fa-solid fa-trash text-xs"></i></button>
-          </div>
-        </td>
-      </tr>
-    `;
-  });
-}
-
-// ----------------- العملاء (Customers) -----------------
-window.openCustomerModal = function(id = '') {
-  document.getElementById('modalCustomer').classList.remove('hidden');
-  const modalTitle = document.getElementById('customerModalTitle');
-  const cForm = document.getElementById('customerForm');
-  cForm.reset();
-
-  if (id && appState.customers[id]) {
-    const editC = appState.customers[id];
-    modalTitle.innerHTML = `<i class="fa-solid fa-user-pen text-brand-500"></i> تعديل بيانات العميل`;
-    document.getElementById('customerFormId').value = editC.id;
-    document.getElementById('customerFormName').value = editC.name;
-    document.getElementById('customerFormWhatsapp').value = editC.whatsapp || '';
-  } else {
-    modalTitle.innerHTML = `<i class="fa-solid fa-user-plus text-brand-500"></i> إضافة عميل جديد`;
-    document.getElementById('customerFormId').value = '';
-  }
-};
-
-window.closeCustomerModal = function() {
-  document.getElementById('modalCustomer').classList.add('hidden');
-};
-
-document.getElementById('customerForm').addEventListener('submit', (e) => {
-  e.preventDefault();
-  const cId = document.getElementById('customerFormId').value || "cust-" + Date.now();
-  const n = document.getElementById('customerFormName').value.trim();
-  const wa = document.getElementById('customerFormWhatsapp').value.trim();
-
-  const custObj = { id: cId, name: n, whatsapp: wa };
-  
-  syncWrite('customers/' + cId, custObj).then(() => {
-    logToActivity("إدارة عملاء", `تم حفظ بيانات العميل ${n}`, cId);
-    closeCustomerModal();
-  });
-});
-
-window.deleteCustomer = function(cId) {
-  if (confirm("سيتم حذف هذا العميل وجميع كشوفات الحسابات المرتبطة به. هل أنت متأكد؟")) {
-    remove(ref(db, 'customers/' + cId)).then(() => {
-      // حذف قيود هذا العميل أيضاً
-      const ledgerList = Object.values(appState.customerLedgers).filter(l => l.customerId === cId);
-      ledgerList.forEach(l => {
-        remove(ref(db, 'customerLedgers/' + l.id));
-      });
-      logToActivity("حذف عميل", `تم مسح العميل بالكامل`, cId);
-      document.getElementById('noCustomerSelectedState').classList.remove('hidden');
-    });
-  }
-};
-
-function loadCustomersList() {
-  const container = document.getElementById('customersListContainer');
-  container.innerHTML = '';
-  const custList = Object.values(appState.customers);
-
-  if (custList.length === 0) {
-    container.innerHTML = `<p class="text-xs text-slate-400 font-light p-4 text-center select-none">👤 لا يوجد عملاء مسجلين</p>`;
-    return;
-  }
-
-  custList.forEach(c => {
-    container.innerHTML += `
-      <div class="flex items-center justify-between p-3.5 bg-slate-50/50 hover:bg-slate-100/80 dark:bg-slate-800/40 dark:hover:bg-slate-800/80 border border-slate-100 dark:border-slate-800 rounded-xl transition-all duration-200">
-        <div onclick="selectCustomerToViewLedger('${c.id}')" class="flex-1 cursor-pointer select-none">
-          <h4 class="text-xs font-bold text-slate-900 dark:text-white leading-tight mb-0.5">${c.name}</h4>
-          <span class="text-[10px] text-slate-400 font-light flex items-center gap-1">
-            <i class="fa-brands fa-whatsapp text-emerald-500"></i> ${c.whatsapp ? c.whatsapp : "غير متصل"}
-          </span>
-        </div>
-        <div class="flex items-center gap-1">
-          <button onclick="openCustomerModal('${c.id}')" class="w-7 h-7 rounded-lg bg-blue-50 dark:bg-blue-500/10 hover:bg-blue-100 text-blue-600 dark:text-blue-400 flex items-center justify-center transition-all"><i class="fa-solid fa-pen text-[10px]"></i></button>
-          <button onclick="deleteCustomer('${c.id}')" class="w-7 h-7 rounded-lg bg-red-50 dark:bg-red-500/10 hover:bg-red-100 text-red-600 dark:text-red-400 flex items-center justify-center transition-all"><i class="fa-solid fa-trash text-[10px]"></i></button>
-        </div>
-      </div>
-    `;
-  });
-}
-
-// ----------------- كشف حسابات العميل (Customer Ledgers) -----------------
-let currentSelectedCustomerId = null;
-
-window.selectCustomerToViewLedger = function(id) {
-  currentSelectedCustomerId = id;
-  const cObj = appState.customers[id];
-  if (!cObj) return;
-
-  document.getElementById('noCustomerSelectedState').classList.add('hidden');
-  document.getElementById('selectedCustomerNameTitle').innerHTML = `<i class="fa-solid fa-user-circle text-brand-500"></i> كشف معاملات: ${cObj.name}`;
-  document.getElementById('selectedCustomerWhatsappTitle').innerHTML = cObj.whatsapp ? `<i class="fa-brands fa-whatsapp"></i> ${cObj.whatsapp}` : `<i class="fa-solid fa-link-slash"></i> بدون رقم تواصل`;
-
-  loadCustomerLedgerTable(id);
-};
-
-function loadCustomerLedgerTable(cId) {
-  const listBody = document.getElementById('customerSingleLedgerList');
-  listBody.innerHTML = '';
-  
-  const singleLedgerItems = Object.values(appState.customerLedgers).filter(l => l.customerId === cId);
-  
-  let subUSD = 0, subTRY = 0, subSYP = 0;
-  
-  if (singleLedgerItems.length === 0) {
-    listBody.innerHTML = `<tr><td colspan="5" class="p-6 text-center text-slate-400 select-none">📭 لا يوجد أي معاملات مسجلة بعد لهذا العميل</td></tr>`;
-  } else {
-    singleLedgerItems.reverse().forEach(l => {
-      const isLana = l.type === "لنا";
-      const amtVal = Number(l.amount);
-
-      if (l.currency === "USD") subUSD += isLana ? amtVal : -amtVal;
-      if (l.currency === "TRY") subTRY += isLana ? amtVal : -amtVal;
-      if (l.currency === "SYP") subSYP += isLana ? amtVal : -amtVal;
-
-      listBody.innerHTML += `
-        <tr class="hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-all border-b border-slate-100 dark:border-slate-800/60">
-          <td class="p-3 font-semibold text-slate-400">${l.createdAtDay}</td>
-          <td class="p-3"><span class="px-2 py-1 ${isLana ? 'bg-amber-50 dark:bg-amber-500/10 text-amber-600 dark:text-amber-400' : 'bg-blue-50 dark:bg-blue-500/10 text-blue-600 dark:text-blue-400'} font-bold rounded-lg select-none">${l.type}</span></td>
-          <td class="p-3 font-bold text-slate-800 dark:text-slate-200">${amtVal.toFixed(2)}</td>
-          <td class="p-3"><span class="px-2 py-1 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 font-bold rounded-lg select-none">${l.currency}</span></td>
-          <td class="p-3 text-center">
-            <button onclick="deleteCustomerLedgerRow('${l.id}')" class="w-7 h-7 rounded-lg bg-red-50 hover:bg-red-100 dark:bg-red-500/10 dark:hover:bg-red-500/20 text-red-600 dark:text-red-400 flex items-center justify-center m-auto transition-all"><i class="fa-solid fa-trash text-[10px]"></i></button>
-          </td>
-        </tr>
-      `;
-    });
-  }
-
-  document.getElementById('customerSubTotalUSD').textContent = subUSD.toFixed(2) + " USD";
-  document.getElementById('customerSubTotalTRY').textContent = subTRY.toFixed(2) + " TRY";
-  document.getElementById('customerSubTotalSYP').textContent = subSYP.toFixed(2) + " SYP";
-
-  document.getElementById('customerSubTotalUSD').className = `text-sm md:text-base font-bold ${subUSD >= 0 ? 'text-amber-600 dark:text-amber-400' : 'text-blue-600 dark:text-blue-400'}`;
-  document.getElementById('customerSubTotalTRY').className = `text-sm md:text-base font-bold ${subTRY >= 0 ? 'text-amber-600 dark:text-amber-400' : 'text-blue-600 dark:text-blue-400'}`;
-  document.getElementById('customerSubTotalSYP').className = `text-sm md:text-base font-bold ${subSYP >= 0 ? 'text-amber-600 dark:text-amber-400' : 'text-blue-600 dark:text-blue-400'}`;
-}
-
-window.openCustomerLedgerModal = function() {
-  if (!currentSelectedCustomerId) return;
-  document.getElementById('modalCustomerLedger').classList.remove('hidden');
-  const modalTitle = document.getElementById('customerLedgerModalTitle');
-  document.getElementById('customerLedgerForm').reset();
-  
-  document.getElementById('customerLedgerFormId').value = '';
-  document.getElementById('customerLedgerFormName').value = appState.customers[currentSelectedCustomerId].name;
-};
-
-window.closeCustomerLedgerModal = function() {
-  document.getElementById('modalCustomerLedger').classList.add('hidden');
-};
-
-document.getElementById('customerLedgerForm').addEventListener('submit', (e) => {
-  e.preventDefault();
-  const lid = "ldg-" + Date.now();
-  const cId = currentSelectedCustomerId;
-  const typ = document.getElementById('customerLedgerFormType').value;
-  const cur = document.getElementById('customerLedgerFormCurrency').value;
-  const amt = Number(document.getElementById('customerLedgerFormAmount').value) || 0;
-
-  const ledgerObj = {
-    id: lid,
-    customerId: cId,
-    type: typ,
-    amount: amt,
-    currency: cur,
-    createdAtDay: new Date().toLocaleDateString("ar-EG"),
-    createdAtTime: new Date().toLocaleTimeString("ar-EG")
-  };
-
-  syncWrite('customerLedgers/' + lid, ledgerObj).then(() => {
-    logToActivity("إضافة قيد ذمم", `تم تسجيل قيد ${typ} بقيمة ${amt} ${cur}`, cId);
-    closeCustomerLedgerModal();
-    selectCustomerToViewLedger(cId);
-  });
-});
-
-window.deleteCustomerLedgerRow = function(ledgerId) {
-  if (confirm("هل تريد إزالة هذا القيد نهائياً من ذمم العميل؟")) {
-    remove(ref(db, 'customerLedgers/' + ledgerId)).then(() => {
-      logToActivity("حذف قيد ذمم", "تم إزالة القيد المالي", ledgerId);
-      if (currentSelectedCustomerId) {
-        selectCustomerToViewLedger(currentSelectedCustomerId);
-      }
-    });
-  }
-};
-
-// ----------------- التقارير المحاسبية (Reports) -----------------
-function loadOverallReportsSummary() {
-  const tableBody = document.getElementById('reportsOverallSummaryList');
-  tableBody.innerHTML = '';
-
-  let usdCount = 0, tryCount = 0, sypCount = 0;
-  let usdPurch = 0, tryPurch = 0, sypPurch = 0;
-  let usdSell = 0, trySell = 0, sypSell = 0;
-  let usdExp = 0, tryExp = 0, sypExp = 0;
-  let usdNet = 0, tryNet = 0, sypNet = 0;
-
-  Object.values(appState.transactions).forEach(tx => {
-    const p = Number(tx.purchaseAmount);
-    const s = Number(tx.sellAmount);
-    const e = Number(tx.expenses);
-    const n = Number(tx.netProfit);
-
-    if (tx.currency === "USD") {
-      usdCount++; usdPurch += p; usdSell += s; usdExp += e; usdNet += n;
-    }
-    if (tx.currency === "TRY") {
-      tryCount++; tryPurch += p; trySell += s; tryExp += e; tryNet += n;
-    }
-    if (tx.currency === "SYP") {
-      sypCount++; sypPurch += p; sypSell += s; sypExp += e; sypNet += n;
-    }
-  });
-
-  const rowTemplate = (cur, count, p, s, e, n) => `
-    <tr class="hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-all border-b border-slate-100 dark:border-slate-800/60 font-medium">
-      <td class="p-4 font-bold text-slate-900 dark:text-white">${cur}</td>
-      <td class="p-4 text-slate-500">${count} معاملة</td>
-      <td class="p-4 text-red-600 dark:text-red-400/80">${p.toFixed(2)}</td>
-      <td class="p-4 text-emerald-600 dark:text-emerald-400">${s.toFixed(2)}</td>
-      <td class="p-4 text-slate-400">${e.toFixed(2)}</td>
-      <td class="p-4 font-bold text-brand-600 dark:text-brand-400">${n.toFixed(2)}</td>
-    </tr>
-  `;
-
-  tableBody.innerHTML += rowTemplate("دولار أمريكي (USD)", usdCount, usdPurch, usdSell, usdExp, usdNet);
-  tableBody.innerHTML += rowTemplate("ليرة تركية (TRY)", tryCount, tryPurch, trySell, tryExp, tryNet);
-  tableBody.innerHTML += rowTemplate("ليرة سورية (SYP)", sypCount, sypPurch, sypSell, sypExp, sypNet);
-}
-
-window.exportReportsToExcel = function() {
-  const summaryData = [
-    ["العملة", "عدد العمليات", "إجمالي الشراء", "إجمالي البيع", "إجمالي المصروفات", "صافي الربح"]
-  ];
-
-  document.querySelectorAll('#reportsOverallSummaryList tr').forEach(tr => {
-    let row = [];
-    tr.querySelectorAll('td').forEach(td => row.push(td.innerText));
-    summaryData.push(row);
-  });
-
-  const wb = XLSX.utils.book_new();
-  const wsSummary = XLSX.utils.aoa_to_sheet(summaryData);
-  XLSX.utils.book_append_sheet(wb, wsSummary, "ملخص الميزانية");
-
-  // تصدير جميع المعاملات في شيت آخر
-  const rawTxData = [["التاريخ", "البائع", "الشراء", "البيع", "المصروفات", "الصافي", "العملة"]];
-  Object.values(appState.transactions).reverse().forEach(tx => {
-    rawTxData.push([tx.createdAtDay, tx.name, tx.purchaseAmount, tx.sellAmount, tx.expenses, tx.netProfit, tx.currency]);
-  });
-  const wsTx = XLSX.utils.aoa_to_sheet(rawTxData);
-  XLSX.utils.book_append_sheet(wb, wsTx, "سجل العمليات");
-
-  XLSX.writeFile(wb, `AlRafah-Financial-Report-${new Date().toISOString().split('T')[0]}.xlsx`);
-};
-
-window.exportReportsToPDF = function() {
-  const { jsPDF } = window.jspdf;
-  const doc = new jsPDF({ orientation: 'p', unit: 'mm', format: 'a4' });
-  doc.text("AL-RAFAH SYSTEM FINANCIAL SUMMARY", 10, 10);
-  
-  let offset = 25;
-  document.querySelectorAll('#reportsOverallSummaryList tr').forEach(tr => {
-    let rTxt = '';
-    tr.querySelectorAll('td').forEach(td => rTxt += ' ' + td.innerText + ' |');
-    doc.text(rTxt, 10, offset);
-    offset += 10;
-  });
-
-  doc.save(`AlRafah-Report-${Date.now()}.pdf`);
-};
-
-// ----------------- سجل النشاطات (Activity) -----------------
-function loadActivityLogs() {
-  const tableBody = document.getElementById('activityLogsList');
-  tableBody.innerHTML = '';
-  const logsList = Object.values(appState.activityLogs);
-
-  if (logsList.length === 0) {
-    tableBody.innerHTML = `<tr><td colspan="5" class="p-6 text-center text-slate-400 select-none font-light">لا توجد نشاطات مسجلة بعد</td></tr>`;
-    return;
-  }
-
-  logsList.reverse().slice(0, 50).forEach(log => {
-    tableBody.innerHTML += `
-      <tr class="hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-all border-b border-slate-100 dark:border-slate-800/60 font-medium">
-        <td class="p-4 text-slate-400 font-normal whitespace-nowrap">${log.timestamp}</td>
-        <td class="p-4 font-bold text-slate-800 dark:text-slate-200">${log.user}</td>
-        <td class="p-4"><span class="px-2 py-1 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded font-bold">${log.type}</span></td>
-        <td class="p-4 text-slate-700 dark:text-slate-300 font-light">${log.description}</td>
-        <td class="p-4 text-slate-400 font-light">${log.details || ""}</td>
-      </tr>
-    `;
-  });
-}
-
-// ----------------- المكاتب (Offices) -----------------
-window.openOfficeModal = function(officeId = '') {
-  document.getElementById('modalOffice').classList.remove('hidden');
-  const modalTitle = document.getElementById('officeModalTitle');
-  const oForm = document.getElementById('officeForm');
-  oForm.reset();
-
-  if (officeId && appState.offices[officeId]) {
-    const editO = appState.offices[officeId];
-    modalTitle.innerHTML = `<i class="fa-solid fa-pen-to-square text-brand-500"></i> تعديل بيانات المكتب`;
-    document.getElementById('officeIdForm').value = editO.id;
-    document.getElementById('officeNameForm').value = editO.officeName;
-    document.getElementById('officeManagerForm').value = editO.managerName;
-    document.getElementById('officeUsernameForm').value = editO.username;
-    document.getElementById('officePasswordForm').value = editO.password;
-    document.getElementById('officeValidFromMonth').value = editO.validFromMonth;
-    document.getElementById('officeValidFromYear').value = editO.validFromYear;
-    document.getElementById('officeValidToMonth').value = editO.validToMonth;
-    document.getElementById('officeValidToYear').value = editO.validToYear;
-  } else {
-    modalTitle.innerHTML = `<i class="fa-solid fa-plus text-brand-500"></i> إضافة مكتب جديد`;
-    document.getElementById('officeIdForm').value = '';
-    document.getElementById('officeValidFromMonth').value = "1";
-    document.getElementById('officeValidFromYear').value = "2026";
-    document.getElementById('officeValidToMonth').value = "12";
-    document.getElementById('officeValidToYear').value = "2027";
-  }
-};
-
-window.closeOfficeModal = function() {
-  document.getElementById('modalOffice').classList.add('hidden');
-};
-
-document.getElementById('officeForm').addEventListener('submit', (e) => {
-  e.preventDefault();
-  const oId = document.getElementById('officeIdForm').value || "office-" + Date.now();
-  const on = document.getElementById('officeNameForm').value.trim();
-  const om = document.getElementById('officeManagerForm').value.trim();
-  const ou = document.getElementById('officeUsernameForm').value.trim();
-  const op = document.getElementById('officePasswordForm').value.trim();
-  const vfm = Number(document.getElementById('officeValidFromMonth').value);
-  const vfy = Number(document.getElementById('officeValidFromYear').value);
-  const vtm = Number(document.getElementById('officeValidToMonth').value);
-  const vty = Number(document.getElementById('officeValidToYear').value);
-
-  const offObj = {
-    id: oId,
-    officeName: on,
-    managerName: om,
-    username: ou,
-    password: op,
-    isAdmin: false,
-    validFromMonth: vfm,
-    validFromYear: vfy,
-    validToMonth: vtm,
-    validToYear: vty
-  };
-
-  syncWrite('offices/' + oId, offObj).then(() => {
-    logToActivity("إدارة المكاتب", `تم حفظ حساب المكتب ${on} من قبل المسؤول`, oId);
-    closeOfficeModal();
-  });
-});
-
-window.deleteOffice = function(id) {
-  if (id === "admin-root") return alert("لا يمكنك إزالة الحساب الرئيسي للنظام");
-  if (confirm("هل أنت متأكد من حذف حساب هذا المكتب تماماً؟")) {
-    remove(ref(db, 'offices/' + id)).then(() => {
-      logToActivity("حذف مكتب", `تم إزالة حساب المكتب ${id}`, id);
-    });
-  }
-};
-
-function loadOffices() {
-  const tableBody = document.getElementById('officesList');
-  tableBody.innerHTML = '';
-  const offList = Object.values(appState.offices);
-
-  if (offList.length === 0) {
-    tableBody.innerHTML = `<tr><td colspan="7" class="p-6 text-center text-slate-400 select-none">🏢 لا توجد مكاتب مسجلة بعد</td></tr>`;
-    return;
-  }
-
-  offList.forEach(o => {
-    const currentYear = 2026;
-    const currentMonth = 5;
-    
-    // فحص الصلاحية وحالة المكتب
-    let isValidRange = true;
-    if (!o.isAdmin) {
-      if (currentYear < o.validFromYear || (currentYear === o.validFromYear && currentMonth < o.validFromMonth)) {
-        isValidRange = false;
-      }
-      if (currentYear > o.validToYear || (currentYear === o.validToYear && currentMonth > o.validToMonth)) {
-        isValidRange = false;
-      }
-    }
-
-    tableBody.innerHTML += `
-      <tr class="hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-all border-b border-slate-100 dark:border-slate-800/60 font-medium">
-        <td class="p-4 font-bold text-slate-900 dark:text-white">${o.officeName}</td>
-        <td class="p-4 text-slate-600 dark:text-slate-400">${o.managerName}</td>
-        <td class="p-4 text-slate-500 font-mono text-xs">${o.username}</td>
-        <td class="p-4">
-          <span class="px-2 py-1 ${isValidRange ? 'bg-emerald-50 dark:bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' : 'bg-rose-50 dark:bg-rose-500/10 text-rose-600 dark:text-rose-400'} font-bold rounded-lg text-xs select-none">
-            ${isValidRange ? "نشط" : "متوقف / منتهي"}
-          </span>
-        </td>
-        <td class="p-4 text-slate-400 font-light text-xs">${o.validFromMonth}/${o.validFromYear}</td>
-        <td class="p-4 text-slate-400 font-light text-xs">${o.validToMonth}/${o.validToYear}</td>
-        <td class="p-4 text-center">
-          <div class="flex items-center justify-center gap-1">
-            <button onclick="openOfficeModal('${o.id}')" class="w-8 h-8 rounded-lg bg-blue-50 hover:bg-blue-100 dark:bg-blue-500/10 dark:hover:bg-blue-500/20 text-blue-600 dark:text-blue-400 flex items-center justify-center transition-all duration-150"><i class="fa-solid fa-pen text-xs"></i></button>
-            <button onclick="deleteOffice('${o.id}')" class="w-8 h-8 rounded-lg bg-red-50 hover:bg-red-100 dark:bg-red-500/10 dark:hover:bg-red-500/20 text-red-600 dark:text-red-400 flex items-center justify-center transition-all duration-150 ${o.id === 'admin-root' ? 'opacity-30 cursor-not-allowed' : ''}"><i class="fa-solid fa-trash text-xs"></i></button>
-          </div>
-        </td>
-      </tr>
-    `;
-  });
-}
-
-// ----------------- الإعدادات العامة (Settings) -----------------
-document.getElementById('updateAdminSettingsForm').addEventListener('submit', (e) => {
-  e.preventDefault();
-  if (!appState.activeUser) return;
-  
-  const u = document.getElementById('adminCurrentUsernameInput').value.trim();
-  const p = document.getElementById('adminCurrentPasswordInput').value.trim();
-  
-  appState.activeUser.username = u;
-  appState.activeUser.password = p;
-
-  syncWrite('offices/' + appState.activeUser.id, appState.activeUser).then(() => {
-    alert("تم تعديل بيانات حساب الدخول الخاص بك بنجاح!");
-    logToActivity("تعديل حساب المدير", "تغيير إعدادات الحساب وكلمة السر", appState.activeUser.username);
-  });
-});
-
-window.saveExchangeRates = function() {
-  const tryRate = Number(document.getElementById('configExUSDToTRY').value) || 32.50;
-  const sypRate = Number(document.getElementById('configExUSDToSYP').value) || 14850;
-
-  appState.config.exUSDToTRY = tryRate;
-  appState.config.exUSDToSYP = sypRate;
-
-  syncWrite('config', appState.config).then(() => {
-    alert("تم حفظ أسعار الصرف الجديدة في السيرفر بنجاح!");
-    logToActivity("تحديث أسعار الصرف", `تم تعديل الأسعار لـ: USD->TRY: ${tryRate}, USD->SYP: ${sypRate}`, "");
-  });
-};
-
-window.calculateLiveConvertResult = function() {
-  const amount = Number(document.getElementById('converterAmount').value) || 0;
-  const fCur = document.getElementById('converterFromCurrency').value;
-  const tCur = document.getElementById('converterToCurrency').value;
-
-  // تحويل المبلغ لـ USD أولاً
-  let inUSD = amount;
-  if (fCur === "TRY") inUSD = amount / appState.config.exUSDToTRY;
-  if (fCur === "SYP") inUSD = amount / appState.config.exUSDToSYP;
-
-  // تحويل من USD للعملة المستهدفة
-  let outVal = inUSD;
-  if (tCur === "TRY") outVal = inUSD * appState.config.exUSDToTRY;
-  if (tCur === "SYP") outVal = inUSD * appState.config.exUSDToSYP;
-
-  document.getElementById('liveConvertResultsDisplay').textContent = `${outVal.toFixed(2)} ${tCur}`;
-};
-
-window.resetAllDataAndFlush = function() {
-  if (confirm("هل أنت متأكد تماماً من رغبتك في مسح كافة الحسابات، المكاتب والعمليات؟ هذه الخطوة لا يمكن التراجع عنها.")) {
-    const rootRef = ref(db);
-    set(rootRef, {
-      config: { exUSDToTRY: 32.50, exUSDToSYP: 14850 },
-      offices: { "admin-root": defaultAdmin }
-    }).then(() => {
-      alert("تمت تهيئة قاعدة البيانات السحابية وحذف كافة السجلات بنجاح!");
-      logout();
-    });
-  }
-};
-
-// ----------------- تصدير واستيراد البيانات (Data Utilities) -----------------
-window.exportData = function() {
-  const dataToExport = {
-    config: appState.config,
-    transactions: appState.transactions,
-    customers: appState.customers,
-    customerLedgers: appState.customerLedgers,
-    offices: appState.offices
-  };
-
-  const str = JSON.stringify(dataToExport, null, 2);
-  const blob = new Blob([str], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `AlRafah-CloudBackup-${Date.now()}.json`;
-  a.click();
-};
-
-window.importData = function(event) {
-  const file = event.target.files[0];
-  if (!file) return;
-
-  const reader = new FileReader();
-  reader.onload = function(e) {
-    try {
-      const imported = JSON.parse(e.target.result);
-      if (imported.transactions || imported.customers || imported.offices) {
+(function() {
+    'use strict';
+
+    const STORAGE_KEY = 'alrefah_accounting_data';
+    const SETTINGS_KEY = 'alrefah_settings';
+    const THEME_KEY = 'alrefah_theme';
+    const USERS_KEY = 'alrefah_users_list';
+    const AUDIT_KEY = 'alrefah_audit_log';
+    const RATES_KEY = 'alrefah_exchange_rates';
+    const OFFICES_KEY = 'alrefah_offices_list';
+
+    let currentPage = 'dashboard';
+    let selectedClientId = null;
+    let profitChart = null;
+    let currentUser = null;
+
+    function getData() {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        const allData = raw ? JSON.parse(raw) : { profits: [], clients: [], clientTransactions: [] };
         
-        if (confirm("هل تريد دمج البيانات المستوردة مع البيانات الحالية على السيرفر؟")) {
-          const mergedTransactions = { ...appState.transactions, ...(imported.transactions || {}) };
-          const mergedCustomers = { ...appState.customers, ...(imported.customers || {}) };
-          const mergedCustomerLedgers = { ...appState.customerLedgers, ...(imported.customerLedgers || {}) };
-          const mergedOffices = { ...appState.offices, ...(imported.offices || {}) };
-
-          syncWrite('transactions', mergedTransactions);
-          syncWrite('customers', mergedCustomers);
-          syncWrite('customerLedgers', mergedCustomerLedgers);
-          syncWrite('offices', mergedOffices).then(() => {
-            alert("تم استيراد ودمج البيانات سحابياً بنجاح!");
-            logToActivity("استيراد بيانات", "تم دمج بيانات خارجية مع قاعدة البيانات الحالية", "");
-          });
-        }
-      } else {
-        alert("ملف JSON غير صالح أو لا يحتوي على بيانات نظام الرفاه.");
-      }
-    } catch (err) {
-      alert("فشل في قراءة ملف JSON المستورد.");
+        // إذا كان المستخدم "مدير عام" يرى كل شيء
+        if (!currentUser || currentUser.role === 'admin') return allData;
+        
+        // إذا كان "مكتب"، نقوم بتصفية البيانات الخاصة به فقط
+        const officeId = currentUser.officeId;
+        return {
+            profits: allData.profits.filter(p => p.officeId === officeId),
+            clients: allData.clients.filter(c => c.officeId === officeId),
+            clientTransactions: allData.clientTransactions.filter(t => t.officeId === officeId)
+        };
     }
-  };
-  reader.readAsText(file);
-};
 
-// ----------------- ميزة الوضع المظلم (Dark Mode) -----------------
-const toggleDarkBtn = document.getElementById('toggleDarkMode');
-if (localStorage.getItem('theme') === 'dark' || (!('theme' in localStorage) && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
-  document.documentElement.classList.add('dark');
-} else {
-  document.documentElement.classList.remove('dark');
-}
+    function saveData(data) {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        let allData = raw ? JSON.parse(raw) : { profits: [], clients: [], clientTransactions: [] };
+        
+        if (!currentUser || currentUser.role === 'admin') {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+            return;
+        }
+        
+        const officeId = currentUser.officeId;
+        
+        // تحديث الأرباح: إزالة بيانات المكتب القديمة وإضافة الجديدة
+        allData.profits = allData.profits.filter(p => p.officeId !== officeId).concat(data.profits.map(p => ({...p, officeId})));
+        
+        // تحديث العملاء
+        allData.clients = allData.clients.filter(c => c.officeId !== officeId).concat(data.clients.map(c => ({...c, officeId})));
+        
+        // تحديث العمليات
+        allData.clientTransactions = allData.clientTransactions.filter(t => t.officeId !== officeId).concat(data.clientTransactions.map(t => ({...t, officeId})));
+        
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(allData));
+    }
 
-toggleDarkBtn.addEventListener('click', () => {
-  if (document.documentElement.classList.contains('dark')) {
-    document.documentElement.classList.remove('dark');
-    localStorage.setItem('theme', 'light');
-  } else {
-    document.documentElement.classList.add('dark');
-    localStorage.setItem('theme', 'dark');
-  }
-});
+    function getSettings() {
+        const raw = localStorage.getItem(SETTINGS_KEY);
+        return raw ? JSON.parse(raw) : { user: 'alrfah', pass: 'Mirage09..' };
+    }
+
+    function getUsers() {
+        const raw = localStorage.getItem(USERS_KEY);
+        const defaultUsers = [{ username: 'alrfah', password: 'Mirage09..', role: 'admin', status: 'active', createdAt: new Date().toISOString() }];
+        return raw ? JSON.parse(raw) : defaultUsers;
+    }
+
+    function saveUsers(users) {
+        localStorage.setItem(USERS_KEY, JSON.stringify(users));
+    }
+
+    function getAuditLog() {
+        const raw = localStorage.getItem(AUDIT_KEY);
+        const allLogs = raw ? JSON.parse(raw) : [];
+        if (!currentUser || currentUser.role === 'admin') return allLogs;
+        return allLogs.filter(l => l.officeId === currentUser.officeId || l.user === currentUser.username);
+    }
+
+    function addAuditEntry(type, description, details = '') {
+        const logs = localStorage.getItem(AUDIT_KEY) ? JSON.parse(localStorage.getItem(AUDIT_KEY)) : [];
+        logs.unshift({
+            timestamp: new Date().toISOString(),
+            user: currentUser ? currentUser.username : 'System',
+            officeId: currentUser ? currentUser.officeId : null,
+            type,
+            description,
+            details
+        });
+        localStorage.setItem(AUDIT_KEY, JSON.stringify(logs.slice(0, 500)));
+    }
+
+    function getExchangeRates() {
+        const raw = localStorage.getItem(RATES_KEY);
+        return raw ? JSON.parse(raw) : { usdToTry: 30, usdToSyp: 14500 };
+    }
+
+    function saveExchangeRatesToStorage(rates) {
+        localStorage.setItem(RATES_KEY, JSON.stringify(rates));
+        addAuditEntry('تحديث', 'تحديث أسعار الصرف', `USD/TRY: ${rates.usdToTry}, USD/SYP: ${rates.usdToSyp}`);
+    }
+
+    function showToast(msg, icon = '✅') {
+        const container = document.getElementById('toastContainer');
+        if (!container) return;
+        const toast = document.createElement('div');
+        toast.className = 'toast';
+        toast.innerHTML = `${icon} ${msg}`;
+        container.appendChild(toast);
+        setTimeout(() => toast.remove(), 3000);
+    }
+
+    function toggleTheme() {
+        const isDark = document.body.classList.toggle('dark-mode');
+        localStorage.setItem(THEME_KEY, isDark ? 'dark' : 'light');
+        document.getElementById('themeIcon').className = isDark ? 'fas fa-sun' : 'fas fa-moon';
+        if (profitChart) updateChart();
+    }
+
+    function applyTheme() {
+        if (localStorage.getItem(THEME_KEY) === 'dark') {
+            document.body.classList.add('dark-mode');
+            const themeIcon = document.getElementById('themeIcon');
+            if (themeIcon) themeIcon.className = 'fas fa-sun';
+        }
+    }
+
+    function toggleSidebar() {
+        document.getElementById('sidebar').classList.toggle('open');
+        document.getElementById('sidebarBackdrop').classList.toggle('show');
+    }
+
+    function closeSidebar() {
+        document.getElementById('sidebar').classList.remove('open');
+        document.getElementById('sidebarBackdrop').classList.remove('show');
+    }
+
+    function navigateTo(page) {
+        if (currentUser && currentUser.role === 'office') {
+            if (!isOfficeAccessAllowed(currentUser)) {
+                Swal.fire({
+                    title: 'انتهت صلاحية الوصول',
+                    text: 'انتهت فترة الوصول المسموح بها لهذا المكتب',
+                    icon: 'error',
+                    confirmButtonColor: '#c8963e'
+                }).then(() => {
+                    handleLogout();
+                });
+                return;
+            }
+        }
+        currentPage = page;
+        selectedClientId = null;
+        document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+        const targetPage = document.getElementById('page-' + page);
+        if (targetPage) targetPage.classList.add('active');
+        document.querySelectorAll('.sidebar-nav a').forEach(a => a.classList.remove('active'));
+        const targetNavLink = document.querySelector(`.sidebar-nav a[data-page="${page}"]`);
+        if (targetNavLink) targetNavLink.classList.add('active');
+        
+        const titleElem = document.getElementById('pageTitle');
+        if (titleElem) {
+            titleElem.textContent = {
+                dashboard: 'لوحة التحكم',
+                profits: 'الأرباح والمصروفات',
+                clients: 'العملاء',
+                reports: 'التقارير المحاسبية',
+                settings: 'الإعدادات',
+                tools: 'أدوات متقدمة',
+                audit: 'سجل النشاطات',
+                offices: 'إدارة المكاتب'
+            }[page];
+        }
+        
+        const globalSearch = document.getElementById('globalSearch');
+        if (globalSearch) globalSearch.value = '';
+        closeSidebar();
+        const contentScroll = document.getElementById('contentScroll');
+        if (contentScroll) contentScroll.scrollTop = 0;
+        refreshPage();
+    }
+
+    function refreshPage() {
+        switch (currentPage) {
+            case 'dashboard': renderDashboard(); break;
+            case 'profits': renderProfits(); break;
+            case 'clients': renderClients(); break;
+            case 'reports': renderReports(); break;
+            case 'settings': renderSettings(); break;
+            case 'tools': renderTools(); break;
+            case 'audit': renderAudit(); break;
+            case 'offices': renderOffices(); break;
+        }
+    }
+
+    function handleGlobalSearch() {
+        const q = document.getElementById('globalSearch').value.trim().toLowerCase();
+        if (currentPage === 'clients') renderClients(q);
+        if (currentPage === 'profits') renderProfits(q);
+    }
+
+    function formatNumber(num) {
+        return Number(num || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+
+    function getClientBalance(clientId) {
+        const data = getData();
+        const trans = data.clientTransactions.filter(t => t.clientId === clientId);
+        const bal = { USD: 0, TRY: 0, SYP: 0 };
+        trans.forEach(t => { bal[t.currency] = (bal[t.currency] || 0) + (t.type === 'لنا' ? 1 : -1) * t.amount; });
+        return bal;
+    }
+
+    function renderDashboard() {
+        const data = getData();
+        const totalRevenue = data.profits.reduce((s, p) => s + (p.sell || 0), 0);
+        const totalCost = data.profits.reduce((s, p) => s + (p.buy || 0), 0);
+        const totalExpenses = data.profits.reduce((s, p) => s + (p.expense || 0), 0);
+        const netProfit = totalRevenue - totalCost - totalExpenses;
+        
+        const statsElem = document.getElementById('dashboardStats');
+        if (statsElem) {
+            statsElem.innerHTML = `
+                <div class="stat-card"><div class="stat-icon gold">💰</div><div class="stat-info"><h4>صافي الربح الكلي</h4><div class="value">${formatNumber(netProfit)}</div></div></div>
+                <div class="stat-card"><div class="stat-icon blue">📈</div><div class="stat-info"><h4>إجمالي الإيرادات</h4><div class="value">${formatNumber(totalRevenue)}</div></div></div>
+                <div class="stat-card"><div class="stat-icon red">📉</div><div class="stat-info"><h4>إجمالي التكاليف</h4><div class="value">${formatNumber(totalCost + totalExpenses)}</div></div></div>
+                <div class="stat-card"><div class="stat-icon purple">👥</div><div class="stat-info"><h4>عدد العملاء</h4><div class="value">${data.clients.length}</div></div></div>
+            `;
+        }
+        
+        const sellers = {};
+        data.profits.forEach(p => {
+            if (!sellers[p.seller]) sellers[p.seller] = { count: 0, profit: 0 };
+            sellers[p.seller].count++;
+            sellers[p.seller].profit += (p.sell || 0) - (p.buy || 0) - (p.expense || 0);
+        });
+        
+        const top = Object.entries(sellers).sort((a, b) => b[1].profit - a[1].profit).slice(0, 5);
+        const topSellersElem = document.getElementById('topSellersTable');
+        if (topSellersElem) {
+            topSellersElem.innerHTML = top.length ? top.map(([n, i]) => `
+                <tr><td><strong>${n}</strong></td><td>${i.count}</td><td>${formatNumber(i.profit)}</td></tr>`).join('') :
+                '<tr><td colspan="3">لا توجد سجلات كافية بعد</td></tr>';
+        }
+        updateChart();
+    }
+
+    function updateChart() {
+        const data = getData();
+        const now = new Date();
+        const labels = [], values = [];
+        for (let i = 29; i >= 0; i--) {
+            const d = new Date(now);
+            d.setDate(d.getDate() - i);
+            const ds = d.toISOString().split('T')[0];
+            labels.push(ds.slice(5));
+            const dayOps = data.profits.filter(p => p.date === ds);
+            values.push(dayOps.reduce((s, p) => s + (p.sell || 0) - (p.buy || 0) - (p.expense || 0), 0));
+        }
+        const ctx = document.getElementById('profitChart')?.getContext('2d');
+        if (!ctx) return;
+        if (profitChart) profitChart.destroy();
+        const isDark = document.body.classList.contains('dark-mode');
+        profitChart = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels,
+                datasets: [{
+                    label: 'صافي الربح اليومي',
+                    data: values,
+                    backgroundColor: values.map(v => v >= 0 ? 'rgba(200,150,62,0.7)' : 'rgba(231,76,60,0.7)'),
+                    borderColor: values.map(v => v >= 0 ? '#c8963e' : '#e74c3c'),
+                    borderWidth: 1,
+                    borderRadius: 6,
+                }],
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { labels: { color: isDark ? '#e8eaef' : '#1a1a2e', font: { family: 'Tajawal' } } } },
+                scales: {
+                    x: { ticks: { color: isDark ? '#9ca3b4' : '#5a6070' }, grid: { color: isDark ? '#2a3040' : '#e2e6ef' } },
+                    y: { ticks: { color: isDark ? '#9ca3b4' : '#5a6070' }, grid: { color: isDark ? '#2a3040' : '#e2e6ef' } },
+                },
+            },
+        });
+    }
+
+    window.openProfitModal = function(editId = null) {
+        document.getElementById('profitModalOverlay').classList.add('show');
+        document.getElementById('profitEditId').value = editId || '';
+        document.getElementById('profitModalTitle').textContent = editId ? '✏️ تعديل العملية' : '➕ إضافة عملية';
+        if (editId) {
+            const p = getData().profits.find(x => x.id === editId);
+            if (p) {
+                document.getElementById('profitSeller').value = p.seller;
+                document.getElementById('profitBuy').value = p.buy || '';
+                document.getElementById('profitSell').value = p.sell || '';
+                document.getElementById('profitExpense').value = p.expense || '';
+                document.getElementById('profitCurrency').value = p.currency;
+            }
+        } else {
+            document.getElementById('profitSeller').value = '';
+            document.getElementById('profitBuy').value = '';
+            document.getElementById('profitSell').value = '';
+            document.getElementById('profitExpense').value = '';
+        }
+        calcProfitPreview();
+    };
+
+    window.closeProfitModal = () => document.getElementById('profitModalOverlay').classList.remove('show');
+
+    window.calcProfitPreview = () => {
+        const buy = +document.getElementById('profitBuy').value || 0;
+        const sell = +document.getElementById('profitSell').value || 0;
+        const expense = +document.getElementById('profitExpense').value || 0;
+        const net = sell - buy - expense;
+        const preview = document.getElementById('profitPreview');
+        if (preview) {
+            preview.textContent = `صافي الربح: ${formatNumber(net)}`;
+            preview.className = 'profit-preview ' + (net >= 0 ? 'positive' : 'negative');
+        }
+    };
+
+    window.saveProfit = function() {
+        const seller = document.getElementById('profitSeller').value.trim();
+        const buy = +document.getElementById('profitBuy').value || 0;
+        const sell = +document.getElementById('profitSell').value || 0;
+        const expense = +document.getElementById('profitExpense').value || 0;
+        const currency = document.getElementById('profitCurrency').value;
+        if (!seller) return Swal.fire({ title: 'الرجاء إدخال اسم البائع', icon: 'warning', confirmButtonColor: '#c8963e' });
+        const data = getData();
+        const editId = document.getElementById('profitEditId').value;
+        if (editId) {
+            const idx = data.profits.findIndex(p => p.id === editId);
+            if (idx >= 0) {
+                const old = { ...data.profits[idx] };
+                Object.assign(data.profits[idx], { seller, buy, sell, expense, currency });
+                addAuditEntry('تعديل', `تعديل عملية لـ ${seller}`, `من: ${old.sell} إلى: ${sell} ${currency}`);
+            }
+        } else {
+            const newId = 'p' + Date.now();
+            data.profits.push({ id: newId, seller, buy, sell, expense, currency, date: new Date().toISOString().split('T')[0], officeId: currentUser ? currentUser.officeId : null });
+            addAuditEntry('إضافة', `إضافة عملية جديدة لـ ${seller}`, `المبلغ: ${sell} ${currency}`);
+        }
+        saveData(data);
+        closeProfitModal();
+        renderProfits();
+        showToast(editId ? 'تم تعديل العملية' : 'تمت إضافة العملية بنجاح');
+    };
+
+    window.deleteProfit = function(id) {
+        Swal.fire({ title: 'هل ترغب بحذف هذه العملية؟', icon: 'warning', showCancelButton: true, confirmButtonText: 'حذف', cancelButtonText: 'إلغاء', confirmButtonColor: '#e74c3c' }).then(r => {
+            if (r.isConfirmed) {
+                const data = getData();
+                const p = data.profits.find(x => x.id === id);
+                addAuditEntry('حذف', `حذف عملية لـ ${p.seller}`, `المبلغ: ${p.sell} ${p.currency}`);
+                data.profits = data.profits.filter(p => p.id !== id);
+                saveData(data);
+                renderProfits();
+                showToast('تم حذف العملية');
+            }
+        });
+    };
+
+    function renderProfits(search = '') {
+        const data = getData();
+        const fc = document.getElementById('filterCurrency')?.value || 'all';
+        const df = document.getElementById('filterDateFrom')?.value || '';
+        const dt = document.getElementById('filterDateTo')?.value || '';
+        let list = data.profits.filter(p => (fc === 'all' || p.currency === fc) && (!df || p.date >= df) && (!dt || p.date <= dt));
+        if (search) list = list.filter(p => p.seller.toLowerCase().includes(search));
+        list.sort((a, b) => b.date.localeCompare(a.date));
+        const sym = { USD: '💵', TRY: '🇹🇷', SYP: '🇸🇾' };
+        
+        const tableElem = document.getElementById('profitsTable');
+        if (tableElem) {
+            tableElem.innerHTML = list.length ? list.map(p => {
+                const net = (p.sell || 0) - (p.buy || 0) - (p.expense || 0);
+                return `<tr>
+                    <td>${p.date}</td><td><strong>${p.seller}</strong></td>
+                    <td>${formatNumber(p.buy||0)}</td><td>${formatNumber(p.sell||0)}</td><td>${formatNumber(p.expense||0)}</td>
+                    <td><span class="badge ${net>=0?'badge-success':'badge-danger'}">${formatNumber(net)}</span></td>
+                    <td>${sym[p.currency]||p.currency}</td>
+                    <td>
+                        <button class="btn btn-outline btn-xs" onclick="openProfitModal('${p.id}')"><i class="fas fa-edit"></i></button>
+                        <button class="btn btn-danger btn-xs" onclick="deleteProfit('${p.id}')"><i class="fas fa-trash"></i></button>
+                    </td></tr>`;
+            }).join('') : '';
+        }
+        
+        const emptyElem = document.getElementById('profitsEmpty');
+        if (emptyElem) emptyElem.style.display = list.length ? 'none' : 'block';
+    }
+
+    window.openClientModal = function(editId = null) {
+        document.getElementById('clientModalOverlay').classList.add('show');
+        document.getElementById('clientEditId').value = editId || '';
+        document.getElementById('clientModalTitle').textContent = editId ? '✏️ تعديل بيانات العميل' : '➕ إضافة عميل جديد';
+        if (editId) {
+            const c = getData().clients.find(x => x.id === editId);
+            if (c) { document.getElementById('clientName').value = c.name; document.getElementById('clientPhone').value = c.phone || ''; }
+        } else { document.getElementById('clientName').value = ''; document.getElementById('clientPhone').value = ''; }
+    };
+
+    window.closeClientModal = () => document.getElementById('clientModalOverlay').classList.remove('show');
+
+    window.saveClient = function() {
+        const name = document.getElementById('clientName').value.trim();
+        const phone = document.getElementById('clientPhone').value.trim();
+        if (!name) return Swal.fire({ title: 'الاسم مطلوب', icon: 'warning', confirmButtonColor: '#c8963e' });
+        const data = getData();
+        const editId = document.getElementById('clientEditId').value;
+        if (editId) {
+            const c = data.clients.find(x => x.id === editId);
+            if (c) { c.name = name; c.phone = phone; }
+            addAuditEntry('تعديل', `تعديل بيانات العميل ${name}`);
+        } else {
+            data.clients.push({ id: 'c' + Date.now(), name, phone, officeId: currentUser ? currentUser.officeId : null });
+            addAuditEntry('إضافة', `إضافة عميل جديد: ${name}`);
+        }
+        saveData(data);
+        closeClientModal();
+        renderClients();
+        showToast('تم حفظ بيانات العميل');
+    };
+
+    window.deleteClient = function(id) {
+        Swal.fire({ title: 'هل أنت متأكد من حذف العميل؟', text: 'سيؤدي هذا إلى حذف جميع معاملاته المسجلة بشكل نهائي!', icon: 'warning', showCancelButton: true, confirmButtonText: 'حذف', cancelButtonText: 'إلغاء', confirmButtonColor: '#e74c3c' }).then(r => {
+            if (r.isConfirmed) {
+                const data = getData();
+                const c = data.clients.find(x => x.id === id);
+                addAuditEntry('حذف', `حذف العميل ${c.name}`);
+                data.clients = data.clients.filter(c => c.id !== id);
+                data.clientTransactions = data.clientTransactions.filter(t => t.clientId !== id);
+                saveData(data);
+                if (selectedClientId === id) { selectedClientId = null; document.getElementById('clientDetailCard').style.display = 'none'; }
+                renderClients();
+                showToast('تم حذف العميل');
+            }
+        });
+    };
+
+    window.selectClient = function(id) {
+        selectedClientId = id;
+        renderClients();
+        const detailCard = document.getElementById('clientDetailCard');
+        if (detailCard) {
+            detailCard.style.display = 'block';
+            renderClientDetail();
+            detailCard.scrollIntoView({ behavior: 'smooth' });
+        }
+    };
+
+    window.closeClientDetail = function() { 
+        selectedClientId = null; 
+        const detailCard = document.getElementById('clientDetailCard');
+        if (detailCard) detailCard.style.display = 'none'; 
+        renderClients(); 
+    };
+
+    window.openWhatsApp = function(clientId) {
+        const data = getData();
+        const client = data.clients.find(c => c.id === clientId);
+        if (!client || !client.phone) return Swal.fire({ title: 'يرجى إدخال رقم الواتساب أولاً', icon: 'warning' });
+        const bal = getClientBalance(clientId);
+        const parts = [];
+        if (bal.USD) parts.push(`💵 دولار أمريكي ${Math.abs(bal.USD).toFixed(2)} ${bal.USD > 0 ? 'دائن لنا' : 'دائن لكم'}`);
+        if (bal.TRY) parts.push(`🇹🇷 ليرة تركية ${Math.abs(bal.TRY).toFixed(2)} ${bal.TRY > 0 ? 'دائن لنا' : 'دائن لكم'}`);
+        if (bal.SYP) parts.push(`🇸🇾 ليرة سورية ${Math.abs(bal.SYP).toFixed(2)} ${bal.SYP > 0 ? 'دائن لنا' : 'دائن لكم'}`);
+        const plainMsg = [
+            `*مكتب الرفاه*`,
+            `💵💵💵💵💵💵💵💵`,
+            `*الحساب:*`,
+            `*${client.name}*`,
+            parts.length ? parts.join('\n') : `💵 الرصيد متوازن (0)`,
+            `💵💵💵💵💵💵💵💵`,
+            `💰💰💰💰💰💰💰💰`,
+            `يرجى مطابقة هذه الأرصدة`
+        ].join('\n');
+        window.open(`https://wa.me/${client.phone.replace(/\D/g,'')}?text=${encodeURIComponent(plainMsg)}`, '_blank');
+        addAuditEntry('واتساب', `إرسال كشف حساب للعميل ${client.name}`);
+    };
+
+    function renderClients(search = '') {
+        const data = getData();
+        let clients = data.clients;
+        if (search) clients = clients.filter(c => c.name.toLowerCase().includes(search) || (c.phone && c.phone.includes(search)));
+        
+        const cardsElem = document.getElementById('clientCards');
+        if (cardsElem) {
+            cardsElem.innerHTML = clients.length ? clients.map(c => {
+                const bal = getClientBalance(c.id);
+                const balStr = [bal.USD && `💵${formatNumber(bal.USD)}`, bal.TRY && `🇹🇷${formatNumber(bal.TRY)}`, bal.SYP && `🇸🇾${formatNumber(bal.SYP)}`].filter(Boolean).join(' | ') || '0.00';
+                return `<div class="client-card ${selectedClientId===c.id?'selected':''}" onclick="selectClient('${c.id}')">
+                    <button class="whatsapp-btn" onclick="event.stopPropagation();openWhatsApp('${c.id}')"><i class="fab fa-whatsapp"></i></button>
+                    <h4>${c.name}</h4><div class="phone">📱 ${c.phone||'-'}</div>
+                    <div class="balance-row"><span>الرصيد</span><span>${balStr}</span></div>
+                    <div style="margin-top:10px;display:flex;gap:4px;">
+                        <button class="btn btn-outline btn-xs" onclick="event.stopPropagation();openClientModal('${c.id}')"><i class="fas fa-edit"></i></button>
+                        <button class="btn btn-danger btn-xs" onclick="event.stopPropagation();deleteClient('${c.id}')"><i class="fas fa-trash"></i></button>
+                    </div></div>`;
+            }).join('') : '';
+        }
+        
+        const emptyElem = document.getElementById('clientsEmpty');
+        if (emptyElem) emptyElem.style.display = clients.length ? 'none' : 'block';
+        if (selectedClientId && document.getElementById('clientDetailCard')?.style.display === 'block') renderClientDetail();
+    }
+
+    function renderClientDetail() {
+        if (!selectedClientId) return;
+        const data = getData();
+        const client = data.clients.find(c => c.id === selectedClientId);
+        if (!client) return closeClientDetail();
+        document.getElementById('clientDetailTitle').textContent = `معاملات العميل: ${client.name}`;
+        const bal = getClientBalance(selectedClientId);
+        
+        const summaryElem = document.getElementById('clientBalanceSummary');
+        if (summaryElem) {
+            summaryElem.innerHTML = ['USD', 'TRY', 'SYP'].map(cur => {
+                const v = bal[cur] || 0;
+                const cls = v > 0 ? 'badge-success' : v < 0 ? 'badge-danger' : 'badge-info';
+                return `<span class="badge ${cls}">${cur}: ${formatNumber(Math.abs(v))} ${v>0?'لنا':v<0?'لكم':'متوازن'}</span>`;
+            }).join(' ');
+        }
+        
+        const trans = data.clientTransactions.filter(t => t.clientId === selectedClientId).sort((a, b) => b.date.localeCompare(a.date));
+        const transTable = document.getElementById('clientTransactionsTable');
+        if (transTable) {
+            transTable.innerHTML = trans.length ? trans.map(t => `
+                <tr><td>${t.date}</td><td><span class="badge ${t.type==='لنا'?'badge-success':'badge-danger'}">${t.type}</span></td><td>${formatNumber(t.amount)}</td><td>${t.currency}</td>
+                <td><button class="btn btn-outline btn-xs" onclick="editClientTransaction('${t.id}')"><i class="fas fa-edit"></i></button>
+                <button class="btn btn-danger btn-xs" onclick="deleteClientTransaction('${t.id}')"><i class="fas fa-trash"></i></button></td></tr>`).join('') : '';
+        }
+    }
+
+    window.openClientTransactionModal = function(editId = null) {
+        const data = getData();
+        const sel = document.getElementById('clientTransClient');
+        if (sel) {
+            sel.innerHTML = data.clients.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
+            if (editId) {
+                const t = data.clientTransactions.find(x => x.id === editId);
+                if (t) { sel.value = t.clientId; document.getElementById('clientTransType').value = t.type; document.getElementById('clientTransCurrency').value = t.currency; document.getElementById('clientTransAmount').value = t.amount; }
+            } else { if (selectedClientId) sel.value = selectedClientId; document.getElementById('clientTransAmount').value = ''; }
+        }
+        document.getElementById('clientTransEditId').value = editId || '';
+        document.getElementById('clientTransModalOverlay').classList.add('show');
+    };
+
+    window.closeClientTransModal = () => document.getElementById('clientTransModalOverlay').classList.remove('show');
+
+    window.saveClientTransaction = function() {
+        const clientId = document.getElementById('clientTransClient').value;
+        const type = document.getElementById('clientTransType').value;
+        const currency = document.getElementById('clientTransCurrency').value;
+        const amount = +document.getElementById('clientTransAmount').value;
+        if (!clientId || isNaN(amount) || amount <= 0) return Swal.fire({ title: 'بيانات المبلغ غير صحيحة', icon: 'warning', confirmButtonColor: '#c8963e' });
+        const data = getData();
+        const client = data.clients.find(c => c.id === clientId);
+        const editId = document.getElementById('clientTransEditId').value;
+        if (editId) { 
+            const t = data.clientTransactions.find(x => x.id === editId); 
+            if (t) Object.assign(t, { clientId, type, currency, amount }); 
+            addAuditEntry('تعديل', `تعديل قيد مالي للعميل ${client.name}`, `${amount} ${currency} (${type})`);
+        }
+        else {
+            data.clientTransactions.push({ id: 'ct' + Date.now(), clientId, type, currency, amount, date: new Date().toISOString().split('T')[0], officeId: currentUser ? currentUser.officeId : null });
+            addAuditEntry('إضافة', `إضافة قيد مالي للعميل ${client.name}`, `${amount} ${currency} (${type})`);
+        }
+        saveData(data);
+        closeClientTransModal();
+        if (selectedClientId) renderClientDetail();
+        renderClients();
+        showToast('تم حفظ المعاملة المالية');
+    };
+
+    window.editClientTransaction = (id) => openClientTransactionModal(id);
+
+    window.deleteClientTransaction = (id) => {
+        Swal.fire({ title: 'هل أنت متأكد من حذف هذه المعاملة؟', icon: 'warning', showCancelButton: true, confirmButtonText: 'حذف', cancelButtonText: 'إلغاء', confirmButtonColor: '#e74c3c' }).then(r => {
+            if (r.isConfirmed) { 
+                const data = getData(); 
+                const t = data.clientTransactions.find(x => x.id === id);
+                const client = data.clients.find(c => c.id === t.clientId);
+                addAuditEntry('حذف', `حذف قيد مالي للعميل ${client.name}`, `${t.amount} ${t.currency}`);
+                data.clientTransactions = data.clientTransactions.filter(t => t.id !== id); 
+                saveData(data); 
+                if (selectedClientId) renderClientDetail(); 
+                showToast('تم حذف المعاملة'); 
+            }
+        });
+    };
+
+    function renderReports() {
+        const data = getData();
+        const totalRevenue = data.profits.reduce((s, p) => s + (p.sell || 0), 0);
+        const totalCost = data.profits.reduce((s, p) => s + (p.buy || 0), 0);
+        const totalExpenses = data.profits.reduce((s, p) => s + (p.expense || 0), 0);
+        const net = totalRevenue - totalCost - totalExpenses;
+        
+        const statsElem = document.getElementById('reportStats');
+        if (statsElem) {
+            statsElem.innerHTML = `
+                <div class="stat-card"><div class="stat-icon gold">💰</div><div class="stat-info"><h4>صافي الربح</h4><div class="value">${formatNumber(net)}</div></div></div>
+                <div class="stat-card"><div class="stat-icon blue">📈</div><div class="stat-info"><h4>إجمالي الإيرادات</h4><div class="value">${formatNumber(totalRevenue)}</div></div></div>
+                <div class="stat-card"><div class="stat-icon red">📉</div><div class="stat-info"><h4>إجمالي التكاليف</h4><div class="value">${formatNumber(totalCost+totalExpenses)}</div></div></div>`;
+        }
+        
+        const sum = {};
+        data.profits.forEach(p => { 
+            if (!sum[p.currency]) sum[p.currency] = { count: 0, buy: 0, sell: 0, expense: 0, profit: 0 };
+            sum[p.currency].count++; sum[p.currency].buy += p.buy || 0; sum[p.currency].sell += p.sell || 0; sum[p.currency].expense += p.expense || 0;
+            sum[p.currency].profit += (p.sell || 0) - (p.buy || 0) - (p.expense || 0); 
+        });
+        
+        const currencyTable = document.getElementById('currencySummaryTable');
+        if (currencyTable) {
+            currencyTable.innerHTML = Object.entries(sum).map(([cur, s]) => `
+                <tr><td><strong>${cur}</strong></td><td>${s.count}</td><td>${formatNumber(s.buy)}</td><td>${formatNumber(s.sell)}</td><td>${formatNumber(s.expense)}</td><td>${formatNumber(s.profit)}</td></tr>`).join('') || '<tr><td colspan="6">لا توجد سجلات حالية</td></tr>';
+        }
+    }
+
+    window.exportToExcel = () => {
+        const data = getData();
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(data.profits.map(p => ({ ...p, netProfit: (p.sell||0)-(p.buy||0)-(p.expense||0) }))), 'الأرباح');
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(data.clients.map(c => { const b = getClientBalance(c.id); return { ...c, ...b }; })), 'العملاء');
+        XLSX.writeFile(wb, 'تقرير_محاسبي_الرفاه.xlsx');
+        showToast('تم التصدير إلى Excel');
+        addAuditEntry('تصدير', 'تصدير البيانات إلى ملف Excel');
+    };
+
+    window.exportToPDF = () => {
+        const { jsPDF } = window.jspdf;
+        const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+        
+        doc.addFileToVFS('Amiri-Regular.ttf', AMIRI_FONT);
+        doc.addFont('Amiri-Regular.ttf', 'Amiri', 'normal');
+        doc.setFont('Amiri');
+        
+        const now = new Date();
+        const dateStr = now.toLocaleDateString('ar-SA', { year: 'numeric', month: 'long', day: 'numeric' });
+        const timeStr = now.toLocaleTimeString('ar-SA');
+        const data = getData();
+        
+        const offices = getOffices();
+        let officeName = 'مكتب الرفاه المحاسبي';
+        let managerName = 'المدير العام';
+        
+        if (currentUser && currentUser.role === 'office') {
+            const office = offices.find(o => o.id === currentUser.officeId);
+            if (office) {
+                officeName = office.name;
+                managerName = office.managerName;
+            }
+        } else if (currentUser && currentUser.role === 'admin') {
+            officeName = 'مكتب الرفاه الرئيسي';
+            managerName = 'المدير: ' + currentUser.username;
+        }
+
+        doc.setFontSize(22);
+        doc.setTextColor(200, 150, 62);
+        doc.text(officeName, 148, 20, { align: 'center' });
+        
+        doc.setFontSize(14);
+        doc.setTextColor(100, 100, 100);
+        doc.text(managerName, 148, 28, { align: 'center' });
+        
+        doc.setFontSize(10);
+        doc.text('تاريخ التصدير: ' + dateStr + ' | ' + timeStr, 280, 35, { align: 'right' });
+        
+        doc.setDrawColor(200, 150, 62);
+        doc.setLineWidth(0.5);
+        doc.line(20, 38, 280, 38);
+        
+        const tableData = data.profits.map(p => [
+            p.date,
+            p.seller,
+            formatNumber(p.buy||0),
+            formatNumber(p.sell||0),
+            formatNumber(p.expense||0),
+            formatNumber((p.sell||0)-(p.buy||0)-(p.expense||0)),
+            p.currency
+        ]);
+        
+        doc.autoTable({
+            head: [['التاريخ', 'البائع / الجهة', 'الشراء', 'البيع', 'المصروفات', 'الصافي', 'العملة']],
+            body: tableData,
+            startY: 45,
+            theme: 'grid',
+            styles: { font: 'Amiri', fontSize: 10, halign: 'right', cellPadding: 3 },
+            headStyles: { fillColor: [200, 150, 62], textColor: 255, fontStyle: 'bold', halign: 'center' },
+            columnStyles: {
+                0: { halign: 'center' },
+                2: { halign: 'center' },
+                3: { halign: 'center' },
+                4: { halign: 'center' },
+                5: { halign: 'center' },
+                6: { halign: 'center' }
+            },
+            margin: { left: 20, right: 20 }
+        });
+        
+        const summaryY = doc.lastAutoTable.finalY + 15;
+        const finalY = summaryY > 180 ? 20 : summaryY;
+        if (summaryY > 180) doc.addPage();
+        
+        doc.setFontSize(14);
+        doc.setTextColor(0, 0, 0);
+        
+        const totalRevenue = data.profits.reduce((s, p) => s + (p.sell || 0), 0);
+        const totalCost = data.profits.reduce((s, p) => s + (p.buy || 0), 0);
+        const totalExpenses = data.profits.reduce((s, p) => s + (p.expense || 0), 0);
+        const netProfit = totalRevenue - totalCost - totalExpenses;
+
+        doc.text('ملخص التقرير المالي:', 280, finalY, { align: 'right' });
+        doc.setFontSize(11);
+        doc.text('إجمالي الإيرادات: ' + formatNumber(totalRevenue), 280, finalY + 10, { align: 'right' });
+        doc.text('إجمالي التكاليف والمصروفات: ' + formatNumber(totalCost + totalExpenses), 280, finalY + 18, { align: 'right' });
+        
+        doc.setFontSize(13);
+        doc.setTextColor(200, 150, 62);
+        doc.text('صافي الأرباح الكلي: ' + formatNumber(netProfit), 280, finalY + 28, { align: 'right' });
+        
+        doc.save('تقرير_' + officeName.replace(/ /g, '_') + '_' + now.toISOString().slice(0, 10) + '.pdf');
+        showToast('تم تصدير التقرير باللغة العربية بنجاح');
+        addAuditEntry('تصدير', 'تصدير تقرير PDF باللغة العربية');
+    };
+
+    window.exportBackup = () => {
+        const blob = new Blob([JSON.stringify(getData(), null, 2)], { type: 'application/json' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'backup_alrefah_' + new Date().toISOString().slice(0,10) + '.json';
+        a.click();
+        addAuditEntry('نسخ احتياطي', 'تصدير نسخة احتياطية كاملة');
+    };
+
+    window.importBackup = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        Swal.fire({ title: 'استيراد البيانات', text: 'سيتم استبدال كل البيانات الحالية للمنظومة بالكامل!', icon: 'warning', showCancelButton: true, confirmButtonText: 'نعم، استبدل', cancelButtonText: 'إلغاء', confirmButtonColor: '#c8963e' }).then(r => {
+            if (r.isConfirmed) {
+                const reader = new FileReader();
+                reader.onload = (ev) => { 
+                    try { 
+                        const d = JSON.parse(ev.target.result); 
+                        if (d.profits && d.clients && d.clientTransactions) { 
+                            saveData(d); 
+                            addAuditEntry('استيراد', 'استيراد نسخة احتياطية للبيانات');
+                            refreshPage(); 
+                            showToast('تم استيراد البيانات بنجاح'); 
+                        } 
+                        else throw new Error(); 
+                    } catch { Swal.fire({ title: 'ملف البيانات المرفق غير صالح', icon: 'error', confirmButtonColor: '#c8963e' }); } 
+                };
+                reader.readAsText(file);
+            }
+        });
+        e.target.value = '';
+    };
+
+    function renderSettings() {
+        const s = getSettings();
+        document.getElementById('settingsUser').value = s.user;
+        document.getElementById('settingsPass').value = '********';
+    }
+
+    window.resetAllData = () => {
+        Swal.fire({ title: 'حذف جميع البيانات؟', text: 'لن تتمكن من استعادة البيانات المحذوفة نهائياً!', icon: 'error', showCancelButton: true, confirmButtonText: 'نعم، حذف الكل', cancelButtonText: 'إلغاء', confirmButtonColor: '#e74c3c' }).then(r => { 
+            if (r.isConfirmed) { 
+                saveData({ profits: [], clients: [], clientTransactions: [] }); 
+                localStorage.removeItem(AUDIT_KEY);
+                addAuditEntry('تصفير', 'حذف جميع بيانات النظام وتصفير الحسابات');
+                selectedClientId = null; 
+                refreshPage(); 
+                showToast('تم تصفير جميع القيود والحسابات'); 
+            } 
+        });
+    };
+
+    function renderTools() {
+        const rates = getExchangeRates();
+        document.getElementById('usdToTryRate').value = rates.usdToTry;
+        document.getElementById('usdToSypRate').value = rates.usdToSyp;
+        renderSmartStats();
+    }
+
+    window.saveExchangeRates = function() {
+        const usdToTry = +document.getElementById('usdToTryRate').value;
+        const usdToSyp = +document.getElementById('usdToSypRate').value;
+        if (usdToTry <= 0 || usdToSyp <= 0) return Swal.fire({ title: 'أسعار الصرف غير صحيحة', icon: 'error' });
+        saveExchangeRatesToStorage({ usdToTry, usdToSyp });
+        showToast('تم حفظ أسعار الصرف بنجاح');
+    };
+
+    window.convertCurrency = function() {
+        const amount = +document.getElementById('convertAmount').value;
+        const from = document.getElementById('convertFrom').value;
+        const to = document.getElementById('convertTo').value;
+        if (!amount) return;
+        
+        const rates = getExchangeRates();
+        let amountInUsd = amount;
+        if (from === 'TRY') amountInUsd = amount / rates.usdToTry;
+        if (from === 'SYP') amountInUsd = amount / rates.usdToSyp;
+        
+        let result = amountInUsd;
+        if (to === 'TRY') result = amountInUsd * rates.usdToTry;
+        if (to === 'SYP') result = amountInUsd * rates.usdToSyp;
+        
+        const resDiv = document.getElementById('conversionResult');
+        if (resDiv) {
+            resDiv.style.display = 'block';
+            resDiv.innerHTML = `النتيجة: <span style="color:var(--gold);">${formatNumber(result)}</span> ${to}`;
+        }
+    };
+
+    function renderSmartStats() {
+        const data = getData();
+        const statsDiv = document.getElementById('smartStats');
+        if (!statsDiv) return;
+        
+        let totalDebtUsd = 0;
+        data.clients.forEach(c => {
+            const b = getClientBalance(c.id);
+            totalDebtUsd += b.USD || 0;
+        });
+
+        statsDiv.innerHTML = `
+            <div style="padding:15px;background:var(--surface-alt);border-radius:10px;border-right:4px solid var(--gold);">
+                <div style="font-size:0.8rem;color:var(--text-secondary);">إجمالي الديون المستحقة (لنا)</div>
+                <div style="font-size:1.2rem;font-weight:800;">$ ${formatNumber(totalDebtUsd)}</div>
+            </div>
+            <div style="padding:15px;background:var(--surface-alt);border-radius:10px;border-right:4px solid var(--blue);">
+                <div style="font-size:0.8rem;color:var(--text-secondary);">أكثر العملاء نشاطاً</div>
+                <div style="font-size:1.1rem;font-weight:700;">${data.clients.length ? data.clients[0].name : '-'}</div>
+            </div>
+        `;
+    }
+
+    function renderAudit() {
+        const logs = getAuditLog();
+        const tbody = document.getElementById('auditTableBody');
+        if (!tbody) return;
+        document.getElementById('auditEmpty').style.display = logs.length ? 'none' : 'block';
+        tbody.innerHTML = logs.map(l => `
+            <tr>
+                <td style="font-size:0.75rem;color:var(--text-secondary);">${new Date(l.timestamp).toLocaleString('ar-SA')}</td>
+                <td><span class="badge badge-info">${l.user}</span></td>
+                <td><span class="badge ${l.type==='حذف'?'badge-danger':l.type==='إضافة'?'badge-success':'badge-gold'}">${l.type}</span></td>
+                <td>${l.description}</td>
+                <td style="font-size:0.8rem;">${l.details}</td>
+            </tr>
+        `).join('');
+    }
+
+    // ============ نظام إدارة المستخدمين والمصادقة المحدث والمضمون ============
+
+    window.handleLogin = function() {
+        const user = document.getElementById('loginUser').value.trim();
+        const pass = document.getElementById('loginPass').value.trim();
+
+        if (!user || !pass) {
+            Swal.fire({ title: 'يرجى ملء كافة الحقول', icon: 'warning' });
+            return;
+        }
+
+        // 1. تجاوز مباشر وصارم لحساب المدير العام لضمان الدخول في كافة الحالات
+        if (user === 'alrfah' && pass === 'Mirage09..') {
+            currentUser = {
+                username: 'alrfah',
+                role: 'admin',
+                status: 'active',
+                createdAt: new Date().toISOString()
+            };
+
+            addAuditEntry('دخول', 'تسجيل دخول ناجح للمدير العام (تجاوز الأخطاء)');
+            
+            document.getElementById('loginOverlay').classList.add('hidden');
+            document.getElementById('appShell').style.display = 'flex';
+            
+            const settingsBtn = document.querySelector('.sidebar-nav a[data-page="settings"]');
+            const auditBtn = document.querySelector('.sidebar-nav a[data-page="audit"]');
+            const officesBtn = document.querySelector('.sidebar-nav a[data-page="offices"]');
+            
+            if (settingsBtn) settingsBtn.style.display = 'flex';
+            if (auditBtn) auditBtn.style.display = 'flex';
+            if (officesBtn) officesBtn.style.display = 'flex';
+            
+            refreshPage();
+            showToast(`مرحباً بك ${currentUser.username} 👋`);
+            return;
+        }
+
+        // 2. التحقق من بقية الحسابات المخزنة محلياً
+        const users = getUsers();
+        const found = users.find(u => u.username === user && u.password === pass);
+        
+        if (found) {
+            if (found.status === 'blocked') {
+                return Swal.fire({ title: 'حساب محظور', text: 'تم حظر هذا الحساب من قبل الإدارة', icon: 'error' });
+            }
+            
+            currentUser = found;
+            
+            // التحقق من صلاحية تاريخ المكاتب الفرعية
+            if (found.role === 'office') {
+                if (typeof isOfficeAccessAllowed === 'function' && !isOfficeAccessAllowed(found)) {
+                    Swal.fire({
+                        title: 'انتهت صلاحية الوصول',
+                        text: 'انتهت فترة الوصول المسموح بها لهذا المكتب أو الحساب محظور',
+                        icon: 'error',
+                        confirmButtonColor: '#c8963e'
+                    }).then(() => {
+                        currentUser = null;
+                        document.getElementById('loginOverlay').classList.remove('hidden');
+                        document.getElementById('appShell').style.display = 'none';
+                    });
+                    return;
+                }
+            }
+
+            addAuditEntry('دخول', `تسجيل دخول ناجح للمستخدم: ${found.username}`);
+            document.getElementById('loginOverlay').classList.add('hidden');
+            document.getElementById('appShell').style.display = 'flex';
+            
+            const settingsBtn = document.querySelector('.sidebar-nav a[data-page="settings"]');
+            const auditBtn = document.querySelector('.sidebar-nav a[data-page="audit"]');
+            const officesBtn = document.querySelector('.sidebar-nav a[data-page="offices"]');
+            
+            if (found.role !== 'admin') {
+                if (settingsBtn) settingsBtn.style.display = 'none';
+                if (auditBtn) auditBtn.style.display = 'none';
+                if (officesBtn) officesBtn.style.display = 'none';
+            } else {
+                if (settingsBtn) settingsBtn.style.display = 'flex';
+                if (auditBtn) auditBtn.style.display = 'flex';
+                if (officesBtn) officesBtn.style.display = 'flex';
+            }
+            
+            refreshPage();
+            showToast(`مرحباً بك ${found.username} 👋`);
+        } else {
+            Swal.fire({ title: 'بيانات الدخول غير صحيحة', icon: 'error' });
+        }
+    };
+
+    window.handleLogout = function() {
+        Swal.fire({ title: 'تسجيل الخروج', icon: 'question', showCancelButton: true, confirmButtonText: 'خروج', cancelButtonText: 'إلغاء' }).then(r => { 
+            if (r.isConfirmed) { 
+                addAuditEntry('خروج', 'تسجيل خروج من النظام');
+                document.getElementById('loginOverlay').classList.remove('hidden'); 
+                document.getElementById('appShell').style.display = 'none'; 
+                currentUser = null;
+            } 
+        });
+    };
+
+    window.openUsersModal = function() {
+        if (currentUser?.role !== 'admin') return;
+        document.getElementById('usersModalOverlay').classList.add('show');
+        renderUsersList();
+    };
+
+    window.closeUsersModal = () => document.getElementById('usersModalOverlay').classList.remove('show');
+
+    function renderUsersList() {
+        const users = getUsers();
+        const tbody = document.getElementById('usersTableBody');
+        if (!tbody) return;
+        tbody.innerHTML = users.map(u => `
+            <tr>
+                <td><strong>${u.username}</strong> ${u.role === 'admin' ? '<span class="badge badge-info">مدير</span>' : ''}</td>
+                <td><span class="badge ${u.status === 'active' ? 'badge-success' : 'badge-danger'}">${u.status === 'active' ? 'نشط' : 'محظور'}</span></td>
+                <td>${new Date(u.createdAt).toLocaleDateString('ar-SA')}</td>
+                <td>
+                    ${u.role !== 'admin' ? `
+                        <button class="btn btn-outline btn-xs" onclick="toggleUserStatus('${u.username}')"><i class="fas fa-ban"></i></button>
+                        <button class="btn btn-danger btn-xs" onclick="deleteUser('${u.username}')"><i class="fas fa-trash"></i></button>
+                    ` : '-'}
+                </td>
+            </tr>
+        `).join('');
+    }
+
+    window.addNewUser = function() {
+        const user = document.getElementById('newUsername').value.trim();
+        const pass = document.getElementById('newUserPassword').value.trim();
+        if (!user || !pass) return;
+        const users = getUsers();
+        if (users.find(u => u.username === user)) return Swal.fire({ title: 'المستخدم موجود', icon: 'error' });
+        users.push({ username: user, password: pass, role: 'user', status: 'active', createdAt: new Date().toISOString() });
+        saveUsers(users);
+        addAuditEntry('إدارة', `إنشاء مستخدم جديد: ${user}`);
+        renderUsersList();
+        showToast('تم إضافة المستخدم');
+        document.getElementById('newUsername').value = '';
+        document.getElementById('newUserPassword').value = '';
+    };
+
+    window.toggleUserStatus = function(username) {
+        const users = getUsers();
+        const u = users.find(x => x.username === username);
+        if (u) {
+            u.status = u.status === 'active' ? 'blocked' : 'active';
+            saveUsers(users);
+            addAuditEntry('إدارة', `تغيير حالة المستخدم ${username} إلى ${u.status}`);
+            renderUsersList();
+        }
+    };
+
+    window.deleteUser = function(username) {
+        Swal.fire({ title: 'حذف؟', icon: 'warning', showCancelButton: true }).then(r => {
+            if (r.isConfirmed) {
+                let users = getUsers();
+                users = users.filter(u => u.username !== username);
+                saveUsers(users);
+                addAuditEntry('إدارة', `حذف المستخدم ${username}`);
+                renderUsersList();
+            }
+        });
+    };
+
+    // ============ نظام التحقق من صلاحيات المكاتب والتواريخ ============
+
+    function isOfficeAccessAllowed(user) {
+        if (!user || user.role !== 'office') return true;
+        
+        const offices = getOffices();
+        const office = offices.find(o => o.username === user.username);
+        
+        if (!office) return false;
+        
+        const now = new Date();
+        const curY = now.getFullYear();
+        const curM = now.getMonth() + 1;
+        
+        const startY = parseInt(office.startYear);
+        const startM = parseInt(office.startMonth);
+        const endY = parseInt(office.endYear);
+        const endM = parseInt(office.endMonth);
+
+        const currentTotal = curY * 12 + curM;
+        const startTotal = startY * 12 + startM;
+        const endTotal = endY * 12 + endM;
+        
+        return currentTotal >= startTotal && currentTotal <= endTotal;
+    }
+
+    function generateOfficeId() {
+        return 'office_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+    }
+
+    function getOffices() {
+        const raw = localStorage.getItem(OFFICES_KEY);
+        return raw ? JSON.parse(raw) : [];
+    }
+
+    function saveOffices(offices) {
+        localStorage.setItem(OFFICES_KEY, JSON.stringify(offices));
+    }
+
+    window.openOfficeModal = function(editId = null) {
+        document.getElementById('officeModalOverlay').classList.add('show');
+        document.getElementById('officeEditId').value = editId || '';
+        document.getElementById('officeModalTitle').textContent = editId ? '✏️ تعديل المكتب' : '➕ إضافة مكتب جديد';
+        
+        if (editId) {
+            const office = getOffices().find(o => o.id === editId);
+            if (office) {
+                document.getElementById('officeName').value = office.name;
+                document.getElementById('officeManagerName').value = office.managerName;
+                document.getElementById('officeUsername').value = office.username;
+                document.getElementById('officePassword').value = office.password;
+                document.getElementById('officeStartMonth').value = office.startMonth;
+                document.getElementById('officeStartYear').value = office.startYear;
+                document.getElementById('officeEndMonth').value = office.endMonth;
+                document.getElementById('officeEndYear').value = office.endYear;
+            }
+        } else {
+            document.getElementById('officeName').value = '';
+            document.getElementById('officeManagerName').value = '';
+            document.getElementById('officeUsername').value = '';
+            document.getElementById('officePassword').value = '';
+            const now = new Date();
+            document.getElementById('officeStartMonth').value = now.getMonth() + 1;
+            document.getElementById('officeStartYear').value = now.getFullYear();
+            document.getElementById('officeEndMonth').value = 12;
+            document.getElementById('officeEndYear').value = now.getFullYear() + 1;
+        }
+    };
+
+    window.closeOfficeModal = () => document.getElementById('officeModalOverlay').classList.remove('show');
+
+    window.saveOffice = function() {
+        const name = document.getElementById('officeName').value.trim();
+        const managerName = document.getElementById('officeManagerName').value.trim();
+        const username = document.getElementById('officeUsername').value.trim();
+        const password = document.getElementById('officePassword').value.trim();
+        const startMonth = document.getElementById('officeStartMonth').value;
+        const startYear = document.getElementById('officeStartYear').value;
+        const endMonth = document.getElementById('officeEndMonth').value;
+        const endYear = document.getElementById('officeEndYear').value;
+        const editId = document.getElementById('officeEditId').value;
+
+        if (!name || !managerName || !username || !password || !startYear || !endYear) {
+            return Swal.fire({ title: 'جميع الحقول مطلوبة', icon: 'error' });
+        }
+
+        let offices = getOffices();
+        let users = getUsers();
+
+        if (!editId && users.find(u => u.username === username)) {
+            return Swal.fire({ title: 'اسم المستخدم موجود بالفعل', icon: 'error' });
+        }
+
+        if (editId) {
+            const officeIndex = offices.findIndex(o => o.id === editId);
+            if (officeIndex !== -1) {
+                const oldUsername = offices[officeIndex].username;
+                offices[officeIndex] = {
+                    id: editId,
+                    name,
+                    managerName,
+                    username,
+                    password,
+                    startMonth,
+                    startYear,
+                    endMonth,
+                    endYear,
+                    status: offices[officeIndex].status,
+                    createdAt: offices[officeIndex].createdAt,
+                    updatedAt: new Date().toISOString()
+                };
+
+                const userIndex = users.findIndex(u => u.username === oldUsername);
+                if (userIndex !== -1) {
+                    users[userIndex].username = username;
+                    users[userIndex].password = password;
+                }
+
+                saveOffices(offices);
+                saveUsers(users);
+                addAuditEntry('تعديل', `تعديل بيانات المكتب: ${name}`, `المدير: ${managerName}`);
+                showToast('تم تحديث بيانات المكتب بنجاح');
+            }
+        } else {
+            const newOffice = {
+                id: generateOfficeId(),
+                name,
+                managerName,
+                username,
+                password,
+                startMonth,
+                startYear,
+                endMonth,
+                endYear,
+                status: 'active',
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString()
+            };
+
+            offices.push(newOffice);
+
+            users.push({
+                username,
+                password,
+                role: 'office',
+                status: 'active',
+                officeId: newOffice.id,
+                createdAt: new Date().toISOString()
+            });
+
+            saveOffices(offices);
+            saveUsers(users);
+            addAuditEntry('إضافة', `إنشاء مكتب جديد: ${name}`, `المدير: ${managerName}, اليوزر: ${username}`);
+            showToast('تم إنشاء المكتب بنجاح');
+        }
+
+        closeOfficeModal();
+        renderOffices();
+    };
+
+    window.deleteOffice = function(officeId) {
+        Swal.fire({
+            title: 'حذف المكتب؟',
+            text: 'سيتم حذف المكتب وحساب المستخدم التابع له',
+            icon: 'warning',
+            showCancelButton: true,
+            confirmButtonText: 'نعم، احذف',
+            cancelButtonText: 'إلغاء',
+            confirmButtonColor: '#e74c3c'
+        }).then(r => {
+            if (r.isConfirmed) {
+                let offices = getOffices();
+                let users = getUsers();
+                
+                const office = offices.find(o => o.id === officeId);
+                if (office) {
+                    users = users.filter(u => u.username !== office.username);
+                    offices = offices.filter(o => o.id !== officeId);
+                    
+                    saveOffices(offices);
+                    saveUsers(users);
+                    addAuditEntry('حذف', `حذف المكتب: ${office.name}`, `المدير: ${office.managerName}`);
+                    showToast('تم حذف المكتب بنجاح');
+                    renderOffices();
+                }
+            }
+        });
+    };
+
+    window.toggleOfficeStatus = function(officeId) {
+        let offices = getOffices();
+        const office = offices.find(o => o.id === officeId);
+        
+        if (office) {
+            const newStatus = office.status === 'active' ? 'blocked' : 'active';
+            office.status = newStatus;
+            office.updatedAt = new Date().toISOString();
+            
+            let users = getUsers();
+            const user = users.find(u => u.username === office.username);
+            if (user) {
+                user.status = newStatus;
+            }
+            
+            saveOffices(offices);
+            saveUsers(users);
+            addAuditEntry('إدارة', `${newStatus === 'blocked' ? 'حظر' : 'تفعيل'} المكتب: ${office.name}`);
+            showToast(newStatus === 'blocked' ? 'تم حظر المكتب' : 'تم تفعيل المكتب');
+            renderOffices();
+        }
+    };
+
+    function renderOffices() {
+        const offices = getOffices();
+        const tbody = document.getElementById('officesTableBody');
+        const emptyState = document.getElementById('officesEmpty');
+
+        if (!tbody) return;
+
+        if (offices.length === 0) {
+            tbody.innerHTML = '';
+            if (emptyState) emptyState.style.display = 'block';
+            return;
+        }
+
+        if (emptyState) emptyState.style.display = 'none';
+        
+        const monthNames = ['', 'يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو', 'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'];
+        
+        tbody.innerHTML = offices.map(office => `
+            <tr>
+                <td><strong>${office.name}</strong></td>
+                <td>${office.managerName}</td>
+                <td><code style="background:var(--surface-alt);padding:4px 8px;border-radius:4px;font-size:0.85rem;">${office.username}</code></td>
+                <td><span class="badge ${office.status === 'active' ? 'badge-success' : 'badge-danger'}">${office.status === 'active' ? 'نشط' : 'محظور'}</span></td>
+                <td style="font-size:0.9rem;">${monthNames[parseInt(office.startMonth)]} ${office.startYear}</td>
+                <td style="font-size:0.9rem;">${monthNames[parseInt(office.endMonth)]} ${office.endYear}</td>
+                <td style="display:flex;gap:4px;flex-wrap:wrap;">
+                    <button class="btn btn-primary btn-xs" onclick="openOfficeModal('${office.id}')" title="تعديل"><i class="fas fa-edit"></i></button>
+                    <button class="btn btn-outline btn-xs" onclick="toggleOfficeStatus('${office.id}')" title="${office.status === 'active' ? 'حظر' : 'تفعيل'}"><i class="fas fa-${office.status === 'active' ? 'ban' : 'check'}"></i></button>
+                    <button class="btn btn-danger btn-xs" onclick="deleteOffice('${office.id}')" title="حذف"><i class="fas fa-trash"></i></button>
+                </td>
+            </tr>
+        `).join('');
+    }
+
+    // ============ الاستماع للأحداث (Event Listeners) ============
+    document.addEventListener('keydown', (e) => { 
+        if (e.key === 'Escape') { 
+            closeProfitModal(); 
+            closeClientModal(); 
+            closeClientTransModal(); 
+            closeSidebar(); 
+            closeUsersModal(); 
+            closeOfficeModal(); 
+        } 
+    });
+
+    document.querySelectorAll('.modal-overlay').forEach(o => {
+        o.addEventListener('click', function(e) { 
+            if (e.target === this) this.classList.remove('show'); 
+        });
+    });
+
+    const loginPassElem = document.getElementById('loginPass');
+    if (loginPassElem) {
+        loginPassElem.addEventListener('keydown', (e) => { 
+            if (e.key === 'Enter') handleLogin(); 
+        });
+    }
+
+    window.toggleSidebar = toggleSidebar;
+    window.closeSidebar = closeSidebar;
+    window.navigateTo = navigateTo;
+    window.toggleTheme = toggleTheme;
+    window.handleGlobalSearch = handleGlobalSearch;
+
+    applyTheme();
+})();
