@@ -1,0 +1,19 @@
+
+                <!-- Offices Page -->
+                <div class="page" id="page-offices">
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="card-title">🏢 إدارة المكاتب</span>
+                            <button class="btn btn-gold btn-sm" onclick="openOfficeModal()">
+                                <i class="fas fa-plus"></i> إضافة مكتب
+                            </button>
+                        </div>
+                        <div class="table-wrapper" style="max-height:600px;overflow-y:auto;">
+                            <table>
+                                <thead><tr><th>اسم المكتب</th><th>اسم المدير</th><th>اليوزر</th><th>الحالة</th><th>صلاحية البدء</th><th>صلاحية التوقف</th><th>الإجراءات</th></tr></thead>
+                                <tbody id="officesTableBody"></tbody>
+                            </table>
+                        </div>
+                        <div class="empty-state" id="officesEmpty" style="display:none;">🏢 لا توجد مكاتب مسجلة بعد</div>
+                    </div>
+                </div>

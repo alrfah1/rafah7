@@ -1,0 +1,62 @@
+
+    <!-- Office Modal -->
+    <div class="modal-overlay" id="officeModalOverlay">
+        <div class="modal" style="width:600px;max-width:95vw;">
+            <h3 id="officeModalTitle">➕ إضافة مكتب جديد</h3>
+            <div class="form-group"><label>🏢 اسم المكتب</label><input type="text" id="officeName" placeholder="اسم المكتب"></div>
+            <div class="form-group"><label>👤 اسم المدير</label><input type="text" id="officeManagerName" placeholder="اسم المدير الكامل"></div>
+            <div class="form-group"><label>👨‍💼 اليوزر (اسم المستخدم)</label><input type="text" id="officeUsername" placeholder="اسم المستخدم للدخول"></div>
+            <div class="form-group"><label>🔒 كلمة السر</label><input type="password" id="officePassword" placeholder="كلمة السر"></div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+                <div class="form-group">
+                    <label>📅 صلاحية البدء من (شهر)</label>
+                    <select id="officeStartMonth" style="width:100%;padding:8px;border:2px solid var(--border);border-radius:6px;background:var(--surface-alt);color:var(--text);font-family:var(--font-primary);">
+                        <option value="1">يناير</option>
+                        <option value="2">فبراير</option>
+                        <option value="3">مارس</option>
+                        <option value="4">أبريل</option>
+                        <option value="5">مايو</option>
+                        <option value="6">يونيو</option>
+                        <option value="7">يوليو</option>
+                        <option value="8">أغسطس</option>
+                        <option value="9">سبتمبر</option>
+                        <option value="10">أكتوبر</option>
+                        <option value="11">نوفمبر</option>
+                        <option value="12">ديسمبر</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>📅 صلاحية البدء من (سنة)</label>
+                    <input type="number" id="officeStartYear" placeholder="2024" min="2024" style="width:100%;padding:8px;border:2px solid var(--border);border-radius:6px;background:var(--surface-alt);color:var(--text);font-family:var(--font-primary);">
+                </div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+                <div class="form-group">
+                    <label>📅 صلاحية التوقف حتى (شهر)</label>
+                    <select id="officeEndMonth" style="width:100%;padding:8px;border:2px solid var(--border);border-radius:6px;background:var(--surface-alt);color:var(--text);font-family:var(--font-primary);">
+                        <option value="1">يناير</option>
+                        <option value="2">فبراير</option>
+                        <option value="3">مارس</option>
+                        <option value="4">أبريل</option>
+                        <option value="5">مايو</option>
+                        <option value="6">يونيو</option>
+                        <option value="7">يوليو</option>
+                        <option value="8">أغسطس</option>
+                        <option value="9">سبتمبر</option>
+                        <option value="10">أكتوبر</option>
+                        <option value="11">نوفمبر</option>
+                        <option value="12">ديسمبر</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>📅 صلاحية التوقف حتى (سنة)</label>
+                    <input type="number" id="officeEndYear" placeholder="2024" min="2024" style="width:100%;padding:8px;border:2px solid var(--border);border-radius:6px;background:var(--surface-alt);color:var(--text);font-family:var(--font-primary);">
+                </div>
+            </div>
+            <input type="hidden" id="officeEditId">
+            <div class="modal-actions">
+                <button class="btn btn-outline btn-sm" onclick="closeOfficeModal()">إلغاء</button>
+                <button class="btn btn-gold btn-sm" onclick="saveOffice()">حفظ</button>
+            </div>
+        </div>
+    </div>
