@@ -1,0 +1,469 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>مكتب الرفاه · نظام محاسبي متكامل</title>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800;900&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.1/jspdf.plugin.autotable.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+
+    <!-- Firebase SDK (Compat version for global 'firebase' object) -->
+    <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-database-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-auth-compat.js"></script>
+
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <!-- Login Overlay -->
+    <div class="login-overlay" id="loginOverlay">
+        <div class="login-card">
+            <div class="login-logo">🏛️</div>
+            <div class="login-title">مكتب الرفاه</div>
+            <div class="login-subtitle">نظام محاسبي متكامل</div>
+            <div class="input-group">
+                <label>👤 اسم المستخدم</label>
+                <input type="text" id="loginUser" placeholder="أدخل اسم المستخدم" autocomplete="username">
+            </div>
+            <div class="input-group">
+                <label>🔒 كلمة المرور</label>
+                <input type="password" id="loginPass" placeholder="أدخل كلمة المرور" autocomplete="current-password">
+            </div>
+            <button class="btn btn-gold" style="width:100%;margin-top:8px;" onclick="handleLogin()">
+                <i class="fas fa-sign-in-alt"></i> تسجيل الدخول
+            </button>
+            <p style="font-size:0.72rem;color:var(--text-secondary);margin-top:12px;text-align:center;">🔒 تم تأمين النظام بنظام إدارة مستخدمين متقدم</p>
+        </div>
+    </div>
+
+    <!-- Toast Container -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <!-- Main App Shell -->
+    <div class="app-shell" id="appShell" style="display:none;">
+        <div class="sidebar-backdrop" id="sidebarBackdrop" onclick="closeSidebar()"></div>
+
+        <!-- Sidebar -->
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <span class="sidebar-logo">🏛️</span>
+                <span class="sidebar-brand">مكتب الرفاه</span>
+            </div>
+            <nav class="sidebar-nav">
+                <a data-page="dashboard" class="active" onclick="navigateTo('dashboard')">
+                    <i class="fas fa-tachometer-alt"></i> لوحة التحكم
+                </a>
+                <a data-page="profits" onclick="navigateTo('profits')">
+                    <i class="fas fa-calculator"></i> الأرباح والمصروفات
+                </a>
+                <a data-page="clients" onclick="navigateTo('clients')">
+                    <i class="fas fa-address-book"></i> العملاء
+                </a>
+                <a data-page="sell-cut" onclick="navigateTo('sell-cut')">
+                    <i class="fas fa-cut"></i> بيع وقص
+                </a>
+                <a data-page="reports" onclick="navigateTo('reports')">
+                    <i class="fas fa-file-invoice"></i> التقارير المحاسبية
+                </a>
+                <a data-page="settings" onclick="navigateTo('settings')">
+                    <i class="fas fa-cogs"></i> الإعدادات
+                </a>
+                <a data-page="tools" onclick="navigateTo('tools')">
+                    <i class="fas fa-tools"></i> أدوات متقدمة
+                </a>
+                <a data-page="audit" onclick="navigateTo('audit')">
+                    <i class="fas fa-history"></i> سجل النشاطات
+                </a>
+                <a data-page="offices" onclick="navigateTo('offices')">
+                    <i class="fas fa-building"></i> المكاتب
+                </a>
+            </nav>
+            <div class="sidebar-footer">
+                <button class="btn btn-outline btn-sm" onclick="exportBackup()">
+                    <i class="fas fa-download"></i> تصدير البيانات
+                </button>
+                <button class="btn btn-outline btn-sm" onclick="document.getElementById('importFile').click()">
+                    <i class="fas fa-upload"></i> استيراد البيانات
+                </button>
+                <input type="file" id="importFile" accept=".json" style="display:none;" onchange="importBackup(event)">
+                <button class="btn btn-danger" style="width:100%; margin-top:10px; padding:12px; font-weight:bold; display:flex; align-items:center; justify-content:center; gap:10px;" onclick="handleLogout()">
+                    <i class="fas fa-power-off"></i> تسجيل الخروج
+                </button>
+            </div>
+        </aside>
+
+        <!-- Main Area -->
+        <div class="main-area">
+            <header class="topbar">
+                <div style="display:flex;align-items:center;gap:8px;">
+                    <button class="menu-toggle" onclick="toggleSidebar()">☰</button>
+                    <h2 class="page-title" id="pageTitle">لوحة التحكم</h2>
+                </div>
+                <div class="topbar-actions">
+                    <input type="text" class="search-input" id="globalSearch" placeholder="🔍 بحث..." oninput="handleGlobalSearch()">
+                    <button class="theme-toggle" onclick="toggleTheme()" title="تغيير المظهر">
+                        <i class="fas fa-moon" id="themeIcon"></i>
+                    </button>
+                </div>
+            </header>
+
+            <div class="content-scroll" id="contentScroll">
+                
+                <!-- Dashboard Page -->
+                <div class="page active" id="page-dashboard">
+                    <div class="stats-grid" id="dashboardStats"></div>
+                    <div class="card">
+                        <div class="card-header"><span class="card-title">📈 الأرباح اليومية (آخر 30 يوم)</span></div>
+                        <div class="chart-container"><canvas id="profitChart"></canvas></div>
+                    </div>
+                    <div class="card">
+                        <div class="card-header"><span class="card-title">🏆 أعلى البائعين ربحية</span></div>
+                        <div class="table-wrapper">
+                            <table>
+                                <thead><tr><th>البائع / الجهة</th><th>عدد المعاملات</th><th>صافي الأرباح</th></tr></thead>
+                                <tbody id="topSellersTable"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Profits Page -->
+                <div class="page" id="page-profits">
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="card-title">💰 سجل العمليات</span>
+                            <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                                <div class="filters-row">
+                                    <select id="filterCurrency" onchange="renderProfits()">
+                                        <option value="all">🌐 جميع العملات</option>
+                                        <option value="USD">💵 دولار أمريكي (USD)</option>
+                                        <option value="TRY">🇹🇷 ليرة تركية (TRY)</option>
+                                        <option value="SYP">🇸🇾 ليرة سورية (SYP)</option>
+                                    </select>
+                                    <input type="date" id="filterDateFrom" onchange="renderProfits()" title="من تاريخ">
+                                    <input type="date" id="filterDateTo" onchange="renderProfits()" title="إلى تاريخ">
+                                </div>
+                                <button class="btn btn-gold btn-sm" onclick="openProfitModal()">
+                                    <i class="fas fa-plus"></i> إضافة عملية
+                                </button>
+                            </div>
+                        </div>
+                        <div class="table-wrapper">
+                            <table>
+                                <thead><tr><th>التاريخ</th><th>البائع / الجهة</th><th>الشراء</th><th>البيع</th><th>المصروفات</th><th>الصافي</th><th>العملة</th><th>الإجراءات</th></tr></thead>
+                                <tbody id="profitsTable"></tbody>
+                            </table>
+                        </div>
+                        <div class="empty-state" id="profitsEmpty" style="display:none;">📭 لا توجد أي بيانات مدخلة بعد</div>
+                    </div>
+                </div>
+
+                <!-- Clients Page -->
+                <div class="page" id="page-clients">
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="card-title">👥 سجل العملاء</span>
+                            <button class="btn btn-gold btn-sm" onclick="openClientModal()">
+                                <i class="fas fa-user-plus"></i> إضافة عميل
+                            </button>
+                        </div>
+                        <div class="client-cards" id="clientCards"></div>
+                        <div class="empty-state" id="clientsEmpty" style="display:none;">👤 لا يوجد عملاء مسجلين</div>
+                    </div>
+                    <div class="card" id="clientDetailCard" style="display:none;">
+                        <div class="card-header">
+                            <span class="card-title" id="clientDetailTitle">📂 معاملات العميل</span>
+                            <div>
+                                <button class="btn btn-primary btn-sm" onclick="openClientTransactionModal()">
+                                    <i class="fas fa-plus"></i> إضافة قيد
+                                </button>
+                                <button class="btn btn-outline btn-sm" onclick="closeClientDetail()">
+                                    <i class="fas fa-times"></i> إغلاق
+                                </button>
+                            </div>
+                        </div>
+                        <div id="clientBalanceSummary" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;"></div>
+                        <div class="table-wrapper">
+                            <table>
+                                <thead><tr><th>التاريخ</th><th>النوع</th><th>المبلغ</th><th>العملة</th><th>الإجراءات</th></tr></thead>
+                                <tbody id="clientTransactionsTable"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Sell and Cut Page -->
+                <div class="page" id="page-sell-cut">
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="card-title">✂️ عمليات البيع والقص</span>
+                            <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                                <div class="filters-row">
+                                    <div class="filter-group">
+                                        <label>السنة</label>
+                                        <select id="sellCutFilterYear" onchange="renderSellCut()"></select>
+                                    </div>
+                                    <div class="filter-group">
+                                        <label>الشهر</label>
+                                        <select id="sellCutFilterMonth" onchange="renderSellCut()">
+                                            <option value="all">📅 كل الأشهر</option>
+                                            <option value="1">يناير</option><option value="2">فبراير</option><option value="3">مارس</option>
+                                            <option value="4">أبريل</option><option value="5">مايو</option><option value="6">يونيو</option>
+                                            <option value="7">يوليو</option><option value="8">أغسطس</option><option value="9">سبتمبر</option>
+                                            <option value="10">أكتوبر</option><option value="11">نوفمبر</option><option value="12">ديسمبر</option>
+                                        </select>
+                                    </div>
+                                    <div class="filter-group">
+                                        <label>اليوم</label>
+                                        <input type="date" id="sellCutFilterDate" onchange="renderSellCut()">
+                                    </div>
+                                </div>
+                                <button class="btn btn-gold btn-sm" onclick="window.openSellCutModal()">
+                                    <i class="fas fa-plus"></i> إضافة عملية
+                                </button>
+                                <button class="btn btn-danger btn-sm" onclick="window.exportSellCutPDF()">
+                                    <i class="fas fa-file-pdf"></i> تصدير PDF
+                                </button>
+                            </div>
+                        </div>
+                        <div class="table-wrapper">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>التاريخ</th><th>العميل</th><th>العملة</th><th>المبلغ</th><th>سعر الشراء</th><th>سعر البيع</th><th>الربح ($)</th><th>الإجراءات</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="sellCutTable"></tbody>
+                            </table>
+                        </div>
+                        <div class="empty-state" id="sellCutEmpty" style="display:none;">📭 لا توجد عمليات بيع وقص مسجلة</div>
+                        <div id="sellCutSummary" class="stats-grid" style="margin-top: 20px;"></div>
+                    </div>
+                </div>
+
+                <!-- Reports Page -->
+                <div class="page" id="page-reports">
+                    <div class="stats-grid" id="reportStats"></div>
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="card-title">📊 التقارير</span>
+                            <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                                <button class="btn btn-primary btn-sm" onclick="exportReportPDF()">
+                                    <i class="fas fa-file-pdf"></i> تصدير PDF
+                                </button>
+                                <button class="btn btn-primary btn-sm" onclick="exportReportExcel()">
+                                    <i class="fas fa-file-excel"></i> تصدير Excel
+                                </button>
+                            </div>
+                        </div>
+                        <div id="reportContent"></div>
+                    </div>
+                </div>
+
+                <!-- Settings Page -->
+                <div class="page" id="page-settings">
+                    <div class="card">
+                        <div class="card-header"><span class="card-title">⚙️ إدارة المستخدمين</span></div>
+                        <div id="usersManagement"></div>
+                    </div>
+                    <div class="card">
+                        <div class="card-header"><span class="card-title">💱 أسعار الصرف</span></div>
+                        <div id="exchangeRatesForm"></div>
+                    </div>
+                </div>
+
+                <!-- Tools Page -->
+                <div class="page" id="page-tools">
+                    <div class="card">
+                        <div class="card-header"><span class="card-title">🛠️ أدوات متقدمة</span></div>
+                        <div id="toolsContent"></div>
+                    </div>
+                </div>
+
+                <!-- Audit Page -->
+                <div class="page" id="page-audit">
+                    <div class="card">
+                        <div class="card-header"><span class="card-title">📋 سجل النشاطات</span></div>
+                        <div class="table-wrapper">
+                            <table>
+                                <thead><tr><th>الوقت</th><th>المستخدم</th><th>النوع</th><th>الوصف</th><th>التفاصيل</th></tr></thead>
+                                <tbody id="auditTable"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Offices Page -->
+                <div class="page" id="page-offices">
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="card-title">🏢 إدارة المكاتب</span>
+                            <button class="btn btn-gold btn-sm" onclick="openOfficeModal()">
+                                <i class="fas fa-plus"></i> إضافة مكتب
+                            </button>
+                        </div>
+                        <div class="table-wrapper">
+                            <table>
+                                <thead><tr><th>اسم المكتب</th><th>مدير المكتب</th><th>اسم المستخدم</th><th>الحالة</th><th>تاريخ البداية</th><th>تاريخ النهاية</th><th>الإجراءات</th></tr></thead>
+                                <tbody id="officesTableBody"></tbody>
+                            </table>
+                        </div>
+                        <div class="empty-state" id="officesEmpty" style="display:none;">🏢 لا توجد مكاتب مسجلة</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modals -->
+    <div class="modal" id="profitModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>إضافة عملية</h3>
+                <button class="close-btn" onclick="closeProfitModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>التاريخ</label>
+                    <input type="date" id="profitDate" required>
+                </div>
+                <div class="form-group">
+                    <label>البائع / الجهة</label>
+                    <input type="text" id="profitSeller" placeholder="أدخل اسم البائع" required>
+                </div>
+                <div class="form-group">
+                    <label>سعر الشراء</label>
+                    <input type="number" id="profitBuy" placeholder="0" step="0.01">
+                </div>
+                <div class="form-group">
+                    <label>سعر البيع</label>
+                    <input type="number" id="profitSell" placeholder="0" step="0.01" required>
+                </div>
+                <div class="form-group">
+                    <label>المصروفات</label>
+                    <input type="number" id="profitExpense" placeholder="0" step="0.01">
+                </div>
+                <div class="form-group">
+                    <label>العملة</label>
+                    <select id="profitCurrency">
+                        <option value="USD">💵 دولار أمريكي (USD)</option>
+                        <option value="TRY">🇹🇷 ليرة تركية (TRY)</option>
+                        <option value="SYP">🇸🇾 ليرة سورية (SYP)</option>
+                    </select>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline" onclick="closeProfitModal()">إلغاء</button>
+                <button class="btn btn-gold" onclick="saveProfitRecord()">حفظ</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Office Modal -->
+    <div class="modal" id="officeModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>إضافة / تعديل مكتب</h3>
+                <button class="close-btn" onclick="closeOfficeModal()">&times;</button>
+            </div>
+            <div class="modal-body" id="officeModalBody"></div>
+            <div class="modal-footer">
+                <button class="btn btn-outline" onclick="closeOfficeModal()">إلغاء</button>
+                <button class="btn btn-gold" onclick="saveOffice()">حفظ</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Client Modal -->
+    <div class="modal" id="clientModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>إضافة عميل</h3>
+                <button class="close-btn" onclick="closeClientModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>اسم العميل</label>
+                    <input type="text" id="clientName" placeholder="أدخل اسم العميل" required>
+                </div>
+                <div class="form-group">
+                    <label>رقم الهاتف</label>
+                    <input type="tel" id="clientPhone" placeholder="أدخل رقم الهاتف">
+                </div>
+                <div class="form-group">
+                    <label>البريد الإلكتروني</label>
+                    <input type="email" id="clientEmail" placeholder="أدخل البريد الإلكتروني">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline" onclick="closeClientModal()">إلغاء</button>
+                <button class="btn btn-gold" onclick="saveClient()">حفظ</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Sell and Cut Modal -->
+    <div class="modal-overlay" id="sellCutModalOverlay">
+        <div class="modal" style="width:550px;max-width:95vw;">
+            <h3 id="sellCutModalTitle">➕ إضافة عملية بيع وقص</h3>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>👤 العميل</label>
+                    <div style="display:flex;gap:8px;">
+                        <select id="sellCutClient" style="flex:1;"></select>
+                        <button class="btn btn-outline btn-sm" onclick="quickAddClient()" title="إضافة عميل سريع"><i class="fas fa-plus"></i></button>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>💵 العملة</label>
+                    <select id="sellCutCurrency">
+                        <option value="TRY">🇹🇷 ليرة تركي</option>
+                        <option value="SYP">🇸🇾 ليرة سوري</option>
+                        <option value="USD">💵 دولار</option>
+                        <option value="EUR">🇪🇺 يورو</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>💰 المبلغ المشتري</label>
+                    <input type="number" id="sellCutAmount" step="0.01" placeholder="أدخل المبلغ" oninput="calculateSellCutProfit()">
+                </div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+                    <div class="form-group">
+                        <label>📉 سعر قص الشراء</label>
+                        <input type="number" id="sellCutBuyPrice" step="0.0001" placeholder="مثلاً 46" oninput="calculateSellCutProfit()">
+                    </div>
+                    <div class="form-group">
+                        <label>📈 سعر قص البيع</label>
+                        <input type="number" id="sellCutSellPrice" step="0.0001" placeholder="مثلاً 45.9" oninput="calculateSellCutProfit()">
+                    </div>
+                </div>
+                <div id="sellCutLiveProfit" class="profit-preview">
+                    الربح المتوقع: 0.00 $
+                </div>
+                <input type="hidden" id="sellCutEditId">
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-outline btn-sm" onclick="closeSellCutModal()">إلغاء</button>
+                <button class="btn btn-gold btn-sm" onclick="saveSellCut()">إضافة للعملية</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="firebase-config.js"></script>
+    <script src="amiri_font.js"></script>
+    <script src="permissions_functions.js"></script>
+    <script src="offices_functions.js"></script>
+    <script src="script.js"></script>
+</body>
+</html>

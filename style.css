@@ -258,6 +258,10 @@ html, body {
     font-size: 1rem;
 }
 
+.fa-cut {
+    color: var(--gold);
+}
+
 .sidebar-footer {
     padding: 12px;
     border-top: 1px solid var(--border);
@@ -532,7 +536,7 @@ table tbody tr:hover {
     position: fixed;
     inset: 0;
     background: rgba(0, 0, 0, 0.55);
-    z-index: 200;
+    z-index: 10000;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -541,7 +545,7 @@ table tbody tr:hover {
     transition: opacity 0.3s, visibility 0.3s;
 }
 
-.modal-overlay.show { opacity: 1; visibility: visible; }
+.modal-overlay.show { opacity: 1 !important; visibility: visible !important; }
 
 .modal {
     background: var(--surface);
@@ -561,6 +565,7 @@ table tbody tr:hover {
 }
 
 .modal h3 { font-size: 1.25rem; font-weight: 800; margin-bottom: 16px; }
+.modal-body { padding: 10px 0; }
 .modal .form-group { margin-bottom: 12px; }
 .modal .form-group label { display: block; font-weight: 600; font-size: 0.85rem; margin-bottom: 4px; }
 .modal .form-group input, .modal .form-group select {
@@ -658,8 +663,10 @@ table tbody tr:hover {
 
 .sidebar-backdrop.show { display: block; }
 
-.filters-row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
-.filters-row select, .filters-row input {
+.filters-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; }
+.filter-group { display: flex; flex-direction: column; gap: 4px; }
+.filter-group label { font-size: 0.75rem; font-weight: 700; color: var(--gold); margin-bottom: 2px; }
+.filters-row select, .filters-row input, .filter-group select, .filter-group input {
     padding: 6px 10px;
     border: 2px solid var(--border);
     border-radius: var(--radius-sm);

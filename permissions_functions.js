@@ -1,58 +1,67 @@
+// ============ نظام التحقق من صلاحيات المكاتب والتواريخ ============
 
-    // ============ نظام التحقق من صلاحيات المكاتب والتواريخ ============
+window.isOfficeAccessAllowed = function(user) {
+    // استثناء المدير العام دائماً من التحقق من الصلاحية
+    if (!user || user.role === 'admin' || user.username === 'alrfah') return true;
+    
+    if (user.role !== 'office') return true;
+    
+    // الحصول على قائمة المكاتب من التخزين المحلي
+    const rawOffices = localStorage.getItem('alrefah_offices_list');
+    const offices = rawOffices ? JSON.parse(rawOffices) : [];
+    const office = offices.find(o => o.id === user.officeId || o.username === user.username);
+    
+    if (!office) return false;
+    if (office.status === 'blocked') return false;
+    
+    const now = new Date();
+    const currentYear = now.getFullYear();
+    const currentMonth = now.getMonth() + 1; // getMonth() returns 0-11
+    
+    // تحويل التاريخ الحالي وتواريخ الصلاحية إلى أرقام للمقارنة السهلة (السنة * 100 + الشهر)
+    const currentTimeValue = currentYear * 100 + currentMonth;
+    const startTimeValue = parseInt(office.startYear) * 100 + parseInt(office.startMonth);
+    const endTimeValue = parseInt(office.endYear) * 100 + parseInt(office.endMonth);
+    
+    // السماح بالدخول إذا كان الوقت الحالي بين وقت البدء ووقت الانتهاء (شاملاً)
+    return currentTimeValue >= startTimeValue && currentTimeValue <= endTimeValue;
+};
 
-    function isOfficeAccessAllowed(user) {
-        if (!user || user.role !== 'office') return true;
-        
-        // البحث عن المكتب المرتبط بهذا المستخدم
-        const offices = getOffices();
-        const office = offices.find(o => o.username === user.username);
-        
-        if (!office) return false;
-        
-        const now = new Date();
-        const currentMonth = now.getMonth() + 1;
-        const currentYear = now.getFullYear();
-        
-        // التحقق من تاريخ البدء
-        const startDate = new Date(office.startYear, office.startMonth - 1, 1);
-        const endDate = new Date(office.endYear, office.endMonth, 0);
-        
-        return now >= startDate && now <= endDate;
-    }
+window.checkAndForceLogoutIfExpired = function() {
+    if (typeof currentUser !== 'undefined' && currentUser) {
+        // لا نتحقق من انتهاء الصلاحية للمدير العام
+        if (currentUser.role === 'admin' || currentUser.username === 'alrfah') return true;
 
-    function checkOfficeAccessOnLogin() {
-        if (!currentUser || currentUser.role !== 'office') return true;
-        
-        if (!isOfficeAccessAllowed(currentUser)) {
-            Swal.fire({
-                title: 'انتهت صلاحية الوصول',
-                text: 'انتهت فترة الوصول المسموح بها لهذا المكتب',
-                icon: 'error',
-                confirmButtonColor: '#c8963e'
-            }).then(() => {
-                handleLogout();
-            });
-            return false;
-        }
-        return true;
-    }
-
-    // إضافة التحقق عند كل عملية للمستخدم من نوع office
-    const originalNavigateTo = window.navigateTo;
-    window.navigateTo = function(page) {
-        if (currentUser && currentUser.role === 'office') {
-            if (!isOfficeAccessAllowed(currentUser)) {
+        if (currentUser.role === 'office') {
+            if (!window.isOfficeAccessAllowed(currentUser)) {
                 Swal.fire({
-                    title: 'انتهت صلاحية الوصول',
-                    text: 'انتهت فترة الوصول المسموح بها لهذا المكتب',
+                    title: 'انتهت صلاحية الحساب',
+                    text: 'عذراً، انتهت الفترة الزمنية المحددة لصلاحية هذا المكتب. يرجى التواصل مع الإدارة للتجديد.',
                     icon: 'error',
-                    confirmButtonColor: '#c8963e'
+                    confirmButtonColor: '#c8963e',
+                    allowOutsideClick: false
                 }).then(() => {
-                    handleLogout();
+                    if (typeof handleLogout === 'function') {
+                        handleLogout();
+                    } else {
+                        location.reload();
+                    }
                 });
-                return;
+                return false;
             }
         }
-        originalNavigateTo(page);
+    }
+    return true;
+};
+
+// تفعيل التحقق التلقائي عند كل عملية انتقال في النظام
+(function() {
+    const originalNavigateTo = window.navigateTo;
+    window.navigateTo = function(page) {
+        if (window.checkAndForceLogoutIfExpired()) {
+            if (typeof originalNavigateTo === 'function') {
+                originalNavigateTo(page);
+            }
+        }
     };
+})();

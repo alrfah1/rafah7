@@ -7,50 +7,61 @@
     const USERS_KEY = 'alrefah_users_list';
     const AUDIT_KEY = 'alrefah_audit_log';
     const RATES_KEY = 'alrefah_exchange_rates';
-    const OFFICES_KEY = 'alrefah_offices_list';
-
-    let currentPage = 'dashboard';
-    let selectedClientId = null;
-    let profitChart = null;
-    let currentUser = null;
 
     function getData() {
         const raw = localStorage.getItem(STORAGE_KEY);
-        const allData = raw ? JSON.parse(raw) : { profits: [], clients: [], clientTransactions: [] };
+        const allData = raw ? JSON.parse(raw) : { profits: [], clients: [], clientTransactions: [], sellCut: [] };
+        if (!allData.sellCut) allData.sellCut = [];
         
-        // إذا كان المستخدم "مدير عام" يرى كل شيء
-        if (!currentUser || currentUser.role === 'admin') return allData;
+        if (!currentUser) return { profits: [], clients: [], clientTransactions: [], sellCut: [] };
+        if (currentUser.role === 'admin') return allData;
         
-        // إذا كان "مكتب"، نقوم بتصفية البيانات الخاصة به فقط
         const officeId = currentUser.officeId;
+        // التأكد من وجود البيانات وتصفيتها للمكتب الحالي
         return {
-            profits: allData.profits.filter(p => p.officeId === officeId),
-            clients: allData.clients.filter(c => c.officeId === officeId),
-            clientTransactions: allData.clientTransactions.filter(t => t.officeId === officeId)
+            profits: (allData.profits || []).filter(p => p.officeId === officeId),
+            clients: (allData.clients || []).filter(c => c.officeId === officeId),
+            clientTransactions: (allData.clientTransactions || []).filter(t => t.officeId === officeId),
+            sellCut: (allData.sellCut || []).filter(s => s.officeId === officeId)
         };
     }
 
-    function saveData(data) {
+    async function saveData(data) {
         const raw = localStorage.getItem(STORAGE_KEY);
-        let allData = raw ? JSON.parse(raw) : { profits: [], clients: [], clientTransactions: [] };
+        let allData = raw ? JSON.parse(raw) : { profits: [], clients: [], clientTransactions: [], sellCut: [] };
         
-        if (!currentUser || currentUser.role === 'admin') {
+        if (!currentUser) return;
+
+        if (currentUser.role === 'admin') {
             localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
             return;
         }
         
         const officeId = currentUser.officeId;
-        
-        // تحديث الأرباح: إزالة بيانات المكتب القديمة وإضافة الجديدة
-        allData.profits = allData.profits.filter(p => p.officeId !== officeId).concat(data.profits.map(p => ({...p, officeId})));
-        
-        // تحديث العملاء
-        allData.clients = allData.clients.filter(c => c.officeId !== officeId).concat(data.clients.map(c => ({...c, officeId})));
-        
-        // تحديث العمليات
-        allData.clientTransactions = allData.clientTransactions.filter(t => t.officeId !== officeId).concat(data.clientTransactions.map(t => ({...t, officeId})));
+        // تحديث بيانات المكتب الحالي في المجموعة الكلية
+        allData.profits = (allData.profits || []).filter(p => p.officeId !== officeId).concat(data.profits.map(p => ({...p, officeId})));
+        allData.clients = (allData.clients || []).filter(c => c.officeId !== officeId).concat(data.clients.map(c => ({...c, officeId})));
+        allData.clientTransactions = (allData.clientTransactions || []).filter(t => t.officeId !== officeId).concat(data.clientTransactions.map(t => ({...t, officeId})));
+        allData.sellCut = (allData.sellCut || []).filter(s => s.officeId !== officeId).concat(data.sellCut.map(s => ({...s, officeId})));
         
         localStorage.setItem(STORAGE_KEY, JSON.stringify(allData));
+
+        // مزامنة مع السحابة إذا كان مكتباً
+        if (typeof saveCloudData === 'function' && firebaseInitialized && officeId) {
+            try {
+                // نرفع فقط البيانات الخاصة بهذا المكتب لضمان عدم تضخم قاعدة البيانات
+                const cloudDataToSave = {
+                    profits: data.profits || [],
+                    clients: data.clients || [],
+                    clientTransactions: data.clientTransactions || [],
+                    sellCut: data.sellCut || []
+                };
+                await saveCloudData(officeId, cloudDataToSave);
+                console.log('✅ تم مزامنة البيانات مع السحابة لهذا المكتب');
+            } catch (error) {
+                console.warn('⚠️ فشل المزامنة السحابية:', error.message);
+            }
+        }
     }
 
     function getSettings() {
@@ -66,6 +77,13 @@
 
     function saveUsers(users) {
         localStorage.setItem(USERS_KEY, JSON.stringify(users));
+        if (typeof saveCloudUsers === 'function' && firebaseInitialized) {
+            saveCloudUsers(users).then(() => {
+                console.log('✅ تم حفظ المستخدمين في Firebase بنجاح');
+            }).catch(error => {
+                console.warn('⚠️ فشل حفظ المستخدمين في Firebase:', error.message);
+            });
+        }
     }
 
     function getAuditLog() {
@@ -98,9 +116,13 @@
         addAuditEntry('تحديث', 'تحديث أسعار الصرف', `USD/TRY: ${rates.usdToTry}, USD/SYP: ${rates.usdToSyp}`);
     }
 
+    let currentPage = 'dashboard';
+    let selectedClientId = null;
+    let profitChart = null;
+    let currentUser = null;
+
     function showToast(msg, icon = '✅') {
         const container = document.getElementById('toastContainer');
-        if (!container) return;
         const toast = document.createElement('div');
         toast.className = 'toast';
         toast.innerHTML = `${icon} ${msg}`;
@@ -108,94 +130,94 @@
         setTimeout(() => toast.remove(), 3000);
     }
 
-    function toggleTheme() {
+    window.toggleTheme = function() {
         const isDark = document.body.classList.toggle('dark-mode');
         localStorage.setItem(THEME_KEY, isDark ? 'dark' : 'light');
         document.getElementById('themeIcon').className = isDark ? 'fas fa-sun' : 'fas fa-moon';
         if (profitChart) updateChart();
-    }
+    };
 
     function applyTheme() {
         if (localStorage.getItem(THEME_KEY) === 'dark') {
             document.body.classList.add('dark-mode');
-            const themeIcon = document.getElementById('themeIcon');
-            if (themeIcon) themeIcon.className = 'fas fa-sun';
+            document.getElementById('themeIcon').className = 'fas fa-sun';
         }
     }
 
-    function toggleSidebar() {
+    window.toggleSidebar = function() {
         document.getElementById('sidebar').classList.toggle('open');
         document.getElementById('sidebarBackdrop').classList.toggle('show');
-    }
+    };
 
-    function closeSidebar() {
+    window.closeSidebar = function() {
         document.getElementById('sidebar').classList.remove('open');
         document.getElementById('sidebarBackdrop').classList.remove('show');
-    }
+    };
 
-    function navigateTo(page) {
-        if (currentUser && currentUser.role === 'office') {
-            if (!isOfficeAccessAllowed(currentUser)) {
-                Swal.fire({
-                    title: 'انتهت صلاحية الوصول',
-                    text: 'انتهت فترة الوصول المسموح بها لهذا المكتب',
-                    icon: 'error',
-                    confirmButtonColor: '#c8963e'
-                }).then(() => {
-                    handleLogout();
-                });
-                return;
-            }
-        }
+    window.navigateTo = function(page) {
         currentPage = page;
         selectedClientId = null;
         document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-        const targetPage = document.getElementById('page-' + page);
-        if (targetPage) targetPage.classList.add('active');
+        document.getElementById('page-' + page).classList.add('active');
         document.querySelectorAll('.sidebar-nav a').forEach(a => a.classList.remove('active'));
         const targetNavLink = document.querySelector(`.sidebar-nav a[data-page="${page}"]`);
         if (targetNavLink) targetNavLink.classList.add('active');
         
-        const titleElem = document.getElementById('pageTitle');
-        if (titleElem) {
-            titleElem.textContent = {
-                dashboard: 'لوحة التحكم',
-                profits: 'الأرباح والمصروفات',
-                clients: 'العملاء',
-                reports: 'التقارير المحاسبية',
-                settings: 'الإعدادات',
-                tools: 'أدوات متقدمة',
-                audit: 'سجل النشاطات',
-                offices: 'إدارة المكاتب'
-            }[page];
-        }
+        document.getElementById('pageTitle').textContent = {
+            dashboard: 'لوحة التحكم',
+            profits: 'الأرباح والمصروفات',
+            clients: 'العملاء',
+            reports: 'التقارير المحاسبية',
+            analytics: 'التحليلات المتقدمة',
+            backups: 'النسخ الاحتياطية',
+            security: 'الأمان وكلمة المرور',
+            settings: 'الإعدادات',
+            tools: 'أدوات متقدمة',
+            audit: 'سجل النشاطات',
+            offices: 'إدارة المكاتب',
+            'sell-cut': 'بيع وقص'
+        }[page];
         
-        const globalSearch = document.getElementById('globalSearch');
-        if (globalSearch) globalSearch.value = '';
+        document.getElementById('globalSearch').value = '';
         closeSidebar();
-        const contentScroll = document.getElementById('contentScroll');
-        if (contentScroll) contentScroll.scrollTop = 0;
+        document.getElementById('contentScroll').scrollTop = 0;
         refreshPage();
-    }
+    };
 
     function refreshPage() {
         switch (currentPage) {
-            case 'dashboard': renderDashboard(); break;
+            case 'dashboard': 
+                renderDashboard(); 
+                if (typeof renderNotificationsPanel === 'function') renderNotificationsPanel();
+                break;
             case 'profits': renderProfits(); break;
             case 'clients': renderClients(); break;
             case 'reports': renderReports(); break;
+            case 'analytics': 
+                if (typeof renderAdvancedDashboard === 'function') renderAdvancedDashboard();
+                if (typeof renderSellerPerformance === 'function') renderSellerPerformance();
+                if (typeof renderClientAnalytics === 'function') renderClientAnalytics();
+                if (typeof renderKPIDashboard === 'function') renderKPIDashboard();
+                break;
+            case 'backups':
+                if (typeof renderSmartBackupsPanel === 'function') renderSmartBackupsPanel();
+                break;
+            case 'security':
+                // صفحة الأمان لا تحتاج رندر خاص حالياً
+                break;
             case 'settings': renderSettings(); break;
             case 'tools': renderTools(); break;
             case 'audit': renderAudit(); break;
             case 'offices': renderOffices(); break;
+            case 'sell-cut': renderSellCut(); break;
         }
     }
 
-    function handleGlobalSearch() {
+    window.handleGlobalSearch = function() {
         const q = document.getElementById('globalSearch').value.trim().toLowerCase();
         if (currentPage === 'clients') renderClients(q);
         if (currentPage === 'profits') renderProfits(q);
-    }
+    };
 
     function formatNumber(num) {
         return Number(num || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -216,15 +238,12 @@
         const totalExpenses = data.profits.reduce((s, p) => s + (p.expense || 0), 0);
         const netProfit = totalRevenue - totalCost - totalExpenses;
         
-        const statsElem = document.getElementById('dashboardStats');
-        if (statsElem) {
-            statsElem.innerHTML = `
-                <div class="stat-card"><div class="stat-icon gold">💰</div><div class="stat-info"><h4>صافي الربح الكلي</h4><div class="value">${formatNumber(netProfit)}</div></div></div>
-                <div class="stat-card"><div class="stat-icon blue">📈</div><div class="stat-info"><h4>إجمالي الإيرادات</h4><div class="value">${formatNumber(totalRevenue)}</div></div></div>
-                <div class="stat-card"><div class="stat-icon red">📉</div><div class="stat-info"><h4>إجمالي التكاليف</h4><div class="value">${formatNumber(totalCost + totalExpenses)}</div></div></div>
-                <div class="stat-card"><div class="stat-icon purple">👥</div><div class="stat-info"><h4>عدد العملاء</h4><div class="value">${data.clients.length}</div></div></div>
-            `;
-        }
+        document.getElementById('dashboardStats').innerHTML = `
+            <div class="stat-card"><div class="stat-icon gold">💰</div><div class="stat-info"><h4>صافي الربح الكلي</h4><div class="value">${formatNumber(netProfit)}</div></div></div>
+            <div class="stat-card"><div class="stat-icon blue">📈</div><div class="stat-info"><h4>إجمالي الإيرادات</h4><div class="value">${formatNumber(totalRevenue)}</div></div></div>
+            <div class="stat-card"><div class="stat-icon red">📉</div><div class="stat-info"><h4>إجمالي التكاليف</h4><div class="value">${formatNumber(totalCost + totalExpenses)}</div></div></div>
+            <div class="stat-card"><div class="stat-icon purple">👥</div><div class="stat-info"><h4>عدد العملاء</h4><div class="value">${data.clients.length}</div></div></div>
+        `;
         
         const sellers = {};
         data.profits.forEach(p => {
@@ -234,12 +253,9 @@
         });
         
         const top = Object.entries(sellers).sort((a, b) => b[1].profit - a[1].profit).slice(0, 5);
-        const topSellersElem = document.getElementById('topSellersTable');
-        if (topSellersElem) {
-            topSellersElem.innerHTML = top.length ? top.map(([n, i]) => `
-                <tr><td><strong>${n}</strong></td><td>${i.count}</td><td>${formatNumber(i.profit)}</td></tr>`).join('') :
-                '<tr><td colspan="3">لا توجد سجلات كافية بعد</td></tr>';
-        }
+        document.getElementById('topSellersTable').innerHTML = top.length ? top.map(([n, i]) => `
+            <tr><td><strong>${n}</strong></td><td>${i.count}</td><td>${formatNumber(i.profit)}</td></tr>`).join('') :
+            '<tr><td colspan="3">لا توجد سجلات كافية بعد</td></tr>';
         updateChart();
     }
 
@@ -314,13 +330,11 @@
         const expense = +document.getElementById('profitExpense').value || 0;
         const net = sell - buy - expense;
         const preview = document.getElementById('profitPreview');
-        if (preview) {
-            preview.textContent = `صافي الربح: ${formatNumber(net)}`;
-            preview.className = 'profit-preview ' + (net >= 0 ? 'positive' : 'negative');
-        }
+        preview.textContent = `صافي الربح: ${formatNumber(net)}`;
+        preview.className = 'profit-preview ' + (net >= 0 ? 'positive' : 'negative');
     };
 
-    window.saveProfit = function() {
+    window.saveProfit = async function() {
         const seller = document.getElementById('profitSeller').value.trim();
         const buy = +document.getElementById('profitBuy').value || 0;
         const sell = +document.getElementById('profitSell').value || 0;
@@ -338,23 +352,32 @@
             }
         } else {
             const newId = 'p' + Date.now();
-            data.profits.push({ id: newId, seller, buy, sell, expense, currency, date: new Date().toISOString().split('T')[0], officeId: currentUser ? currentUser.officeId : null });
+            data.profits.push({ 
+                id: newId, 
+                seller, 
+                buy, 
+                sell, 
+                expense, 
+                currency, 
+                date: new Date().toISOString().split('T')[0],
+                officeId: currentUser.officeId 
+            });
             addAuditEntry('إضافة', `إضافة عملية جديدة لـ ${seller}`, `المبلغ: ${sell} ${currency}`);
         }
-        saveData(data);
+        await saveData(data);
         closeProfitModal();
         renderProfits();
         showToast(editId ? 'تم تعديل العملية' : 'تمت إضافة العملية بنجاح');
     };
 
     window.deleteProfit = function(id) {
-        Swal.fire({ title: 'هل ترغب بحذف هذه العملية؟', icon: 'warning', showCancelButton: true, confirmButtonText: 'حذف', cancelButtonText: 'إلغاء', confirmButtonColor: '#e74c3c' }).then(r => {
+        Swal.fire({ title: 'هل ترغب بحذف هذه العملية؟', icon: 'warning', showCancelButton: true, confirmButtonText: 'حذف', cancelButtonText: 'إلغاء', confirmButtonColor: '#e74c3c' }).then(async r => {
             if (r.isConfirmed) {
                 const data = getData();
                 const p = data.profits.find(x => x.id === id);
                 addAuditEntry('حذف', `حذف عملية لـ ${p.seller}`, `المبلغ: ${p.sell} ${p.currency}`);
                 data.profits = data.profits.filter(p => p.id !== id);
-                saveData(data);
+                await saveData(data);
                 renderProfits();
                 showToast('تم حذف العملية');
             }
@@ -370,25 +393,19 @@
         if (search) list = list.filter(p => p.seller.toLowerCase().includes(search));
         list.sort((a, b) => b.date.localeCompare(a.date));
         const sym = { USD: '💵', TRY: '🇹🇷', SYP: '🇸🇾' };
-        
-        const tableElem = document.getElementById('profitsTable');
-        if (tableElem) {
-            tableElem.innerHTML = list.length ? list.map(p => {
-                const net = (p.sell || 0) - (p.buy || 0) - (p.expense || 0);
-                return `<tr>
-                    <td>${p.date}</td><td><strong>${p.seller}</strong></td>
-                    <td>${formatNumber(p.buy||0)}</td><td>${formatNumber(p.sell||0)}</td><td>${formatNumber(p.expense||0)}</td>
-                    <td><span class="badge ${net>=0?'badge-success':'badge-danger'}">${formatNumber(net)}</span></td>
-                    <td>${sym[p.currency]||p.currency}</td>
-                    <td>
-                        <button class="btn btn-outline btn-xs" onclick="openProfitModal('${p.id}')"><i class="fas fa-edit"></i></button>
-                        <button class="btn btn-danger btn-xs" onclick="deleteProfit('${p.id}')"><i class="fas fa-trash"></i></button>
-                    </td></tr>`;
-            }).join('') : '';
-        }
-        
-        const emptyElem = document.getElementById('profitsEmpty');
-        if (emptyElem) emptyElem.style.display = list.length ? 'none' : 'block';
+        document.getElementById('profitsTable').innerHTML = list.length ? list.map(p => {
+            const net = (p.sell || 0) - (p.buy || 0) - (p.expense || 0);
+            return `<tr>
+                <td>${p.date}</td><td><strong>${p.seller}</strong></td>
+                <td>${formatNumber(p.buy||0)}</td><td>${formatNumber(p.sell||0)}</td><td>${formatNumber(p.expense||0)}</td>
+                <td><span class="badge ${net>=0?'badge-success':'badge-danger'}">${formatNumber(net)}</span></td>
+                <td>${sym[p.currency]||p.currency}</td>
+                <td>
+                    <button class="btn btn-outline btn-xs" onclick="openProfitModal('${p.id}')"><i class="fas fa-edit"></i></button>
+                    <button class="btn btn-danger btn-xs" onclick="deleteProfit('${p.id}')"><i class="fas fa-trash"></i></button>
+                </td></tr>`;
+        }).join('') : '';
+        document.getElementById('profitsEmpty').style.display = list.length ? 'none' : 'block';
     }
 
     window.openClientModal = function(editId = null) {
@@ -403,7 +420,7 @@
 
     window.closeClientModal = () => document.getElementById('clientModalOverlay').classList.remove('show');
 
-    window.saveClient = function() {
+    window.saveClient = async function() {
         const name = document.getElementById('clientName').value.trim();
         const phone = document.getElementById('clientPhone').value.trim();
         if (!name) return Swal.fire({ title: 'الاسم مطلوب', icon: 'warning', confirmButtonColor: '#c8963e' });
@@ -414,142 +431,146 @@
             if (c) { c.name = name; c.phone = phone; }
             addAuditEntry('تعديل', `تعديل بيانات العميل ${name}`);
         } else {
-            data.clients.push({ id: 'c' + Date.now(), name, phone, officeId: currentUser ? currentUser.officeId : null });
+            data.clients.push({ 
+                id: 'c' + Date.now(), 
+                name, 
+                phone,
+                officeId: currentUser.officeId 
+            });
             addAuditEntry('إضافة', `إضافة عميل جديد: ${name}`);
         }
-        saveData(data);
+        await saveData(data);
         closeClientModal();
         renderClients();
         showToast('تم حفظ بيانات العميل');
     };
 
     window.deleteClient = function(id) {
-        Swal.fire({ title: 'هل أنت متأكد من حذف العميل؟', text: 'سيؤدي هذا إلى حذف جميع معاملاته المسجلة بشكل نهائي!', icon: 'warning', showCancelButton: true, confirmButtonText: 'حذف', cancelButtonText: 'إلغاء', confirmButtonColor: '#e74c3c' }).then(r => {
+        Swal.fire({ title: 'حذف العميل؟', text: 'سيتم حذف كل المعاملات المالية المرتبطة به!', icon: 'warning', showCancelButton: true, confirmButtonText: 'حذف', cancelButtonText: 'إلغاء', confirmButtonColor: '#e74c3c' }).then(async r => {
             if (r.isConfirmed) {
                 const data = getData();
                 const c = data.clients.find(x => x.id === id);
                 addAuditEntry('حذف', `حذف العميل ${c.name}`);
-                data.clients = data.clients.filter(c => c.id !== id);
+                data.clients = data.clients.filter(x => x.id !== id);
                 data.clientTransactions = data.clientTransactions.filter(t => t.clientId !== id);
-                saveData(data);
-                if (selectedClientId === id) { selectedClientId = null; document.getElementById('clientDetailCard').style.display = 'none'; }
+                await saveData(data);
                 renderClients();
                 showToast('تم حذف العميل');
             }
         });
     };
 
-    window.selectClient = function(id) {
-        selectedClientId = id;
-        renderClients();
-        const detailCard = document.getElementById('clientDetailCard');
-        if (detailCard) {
-            detailCard.style.display = 'block';
-            renderClientDetail();
-            detailCard.scrollIntoView({ behavior: 'smooth' });
-        }
-    };
-
-    window.closeClientDetail = function() { 
-        selectedClientId = null; 
-        const detailCard = document.getElementById('clientDetailCard');
-        if (detailCard) detailCard.style.display = 'none'; 
-        renderClients(); 
-    };
-
-    window.openWhatsApp = function(clientId) {
-        const data = getData();
-        const client = data.clients.find(c => c.id === clientId);
-        if (!client || !client.phone) return Swal.fire({ title: 'يرجى إدخال رقم الواتساب أولاً', icon: 'warning' });
-        const bal = getClientBalance(clientId);
-        const parts = [];
-        if (bal.USD) parts.push(`💵 دولار أمريكي ${Math.abs(bal.USD).toFixed(2)} ${bal.USD > 0 ? 'دائن لنا' : 'دائن لكم'}`);
-        if (bal.TRY) parts.push(`🇹🇷 ليرة تركية ${Math.abs(bal.TRY).toFixed(2)} ${bal.TRY > 0 ? 'دائن لنا' : 'دائن لكم'}`);
-        if (bal.SYP) parts.push(`🇸🇾 ليرة سورية ${Math.abs(bal.SYP).toFixed(2)} ${bal.SYP > 0 ? 'دائن لنا' : 'دائن لكم'}`);
-        const plainMsg = [
-            `*مكتب الرفاه*`,
-            `💵💵💵💵💵💵💵💵`,
-            `*الحساب:*`,
-            `*${client.name}*`,
-            parts.length ? parts.join('\n') : `💵 الرصيد متوازن (0)`,
-            `💵💵💵💵💵💵💵💵`,
-            `💰💰💰💰💰💰💰💰`,
-            `يرجى مطابقة هذه الأرصدة`
-        ].join('\n');
-        window.open(`https://wa.me/${client.phone.replace(/\D/g,'')}?text=${encodeURIComponent(plainMsg)}`, '_blank');
-        addAuditEntry('واتساب', `إرسال كشف حساب للعميل ${client.name}`);
-    };
-
     function renderClients(search = '') {
         const data = getData();
-        let clients = data.clients;
-        if (search) clients = clients.filter(c => c.name.toLowerCase().includes(search) || (c.phone && c.phone.includes(search)));
-        
-        const cardsElem = document.getElementById('clientCards');
-        if (cardsElem) {
-            cardsElem.innerHTML = clients.length ? clients.map(c => {
-                const bal = getClientBalance(c.id);
-                const balStr = [bal.USD && `💵${formatNumber(bal.USD)}`, bal.TRY && `🇹🇷${formatNumber(bal.TRY)}`, bal.SYP && `🇸🇾${formatNumber(bal.SYP)}`].filter(Boolean).join(' | ') || '0.00';
-                return `<div class="client-card ${selectedClientId===c.id?'selected':''}" onclick="selectClient('${c.id}')">
-                    <button class="whatsapp-btn" onclick="event.stopPropagation();openWhatsApp('${c.id}')"><i class="fab fa-whatsapp"></i></button>
-                    <h4>${c.name}</h4><div class="phone">📱 ${c.phone||'-'}</div>
-                    <div class="balance-row"><span>الرصيد</span><span>${balStr}</span></div>
-                    <div style="margin-top:10px;display:flex;gap:4px;">
-                        <button class="btn btn-outline btn-xs" onclick="event.stopPropagation();openClientModal('${c.id}')"><i class="fas fa-edit"></i></button>
-                        <button class="btn btn-danger btn-xs" onclick="event.stopPropagation();deleteClient('${c.id}')"><i class="fas fa-trash"></i></button>
-                    </div></div>`;
-            }).join('') : '';
-        }
-        
-        const emptyElem = document.getElementById('clientsEmpty');
-        if (emptyElem) emptyElem.style.display = clients.length ? 'none' : 'block';
-        if (selectedClientId && document.getElementById('clientDetailCard')?.style.display === 'block') renderClientDetail();
+        let list = data.clients;
+        if (search) list = list.filter(c => c.name.toLowerCase().includes(search));
+        document.getElementById('clientCards').innerHTML = list.map(c => {
+            const b = getClientBalance(c.id);
+            return `<div class="client-card ${selectedClientId === c.id ? 'selected' : ''}" onclick="selectClient('${c.id}')">
+                <h4>${c.name}</h4><div class="phone">${c.phone || 'بدون هاتف'}</div>
+                <div class="balance-row"><span>USD: ${formatNumber(b.USD)}</span><span>TRY: ${formatNumber(b.TRY)}</span><span>SYP: ${formatNumber(b.SYP)}</span></div>
+                <div style="margin-top:10px;display:flex;gap:5px;">
+                    <button class="btn btn-outline btn-xs" onclick="event.stopPropagation(); openClientModal('${c.id}')"><i class="fas fa-edit"></i></button>
+                    <button class="btn btn-danger btn-xs" onclick="event.stopPropagation(); deleteClient('${c.id}')"><i class="fas fa-trash"></i></button>
+                </div></div>`;
+        }).join('');
+        document.getElementById('clientsEmpty').style.display = list.length ? 'none' : 'block';
     }
+
+    window.selectClient = (id) => { selectedClientId = id; renderClientDetail(); };
 
     function renderClientDetail() {
-        if (!selectedClientId) return;
-        const data = getData();
-        const client = data.clients.find(c => c.id === selectedClientId);
-        if (!client) return closeClientDetail();
-        document.getElementById('clientDetailTitle').textContent = `معاملات العميل: ${client.name}`;
-        const bal = getClientBalance(selectedClientId);
-        
-        const summaryElem = document.getElementById('clientBalanceSummary');
-        if (summaryElem) {
-            summaryElem.innerHTML = ['USD', 'TRY', 'SYP'].map(cur => {
-                const v = bal[cur] || 0;
-                const cls = v > 0 ? 'badge-success' : v < 0 ? 'badge-danger' : 'badge-info';
-                return `<span class="badge ${cls}">${cur}: ${formatNumber(Math.abs(v))} ${v>0?'لنا':v<0?'لكم':'متوازن'}</span>`;
-            }).join(' ');
-        }
-        
-        const trans = data.clientTransactions.filter(t => t.clientId === selectedClientId).sort((a, b) => b.date.localeCompare(a.date));
-        const transTable = document.getElementById('clientTransactionsTable');
-        if (transTable) {
-            transTable.innerHTML = trans.length ? trans.map(t => `
-                <tr><td>${t.date}</td><td><span class="badge ${t.type==='لنا'?'badge-success':'badge-danger'}">${t.type}</span></td><td>${formatNumber(t.amount)}</td><td>${t.currency}</td>
-                <td><button class="btn btn-outline btn-xs" onclick="editClientTransaction('${t.id}')"><i class="fas fa-edit"></i></button>
-                <button class="btn btn-danger btn-xs" onclick="deleteClientTransaction('${t.id}')"><i class="fas fa-trash"></i></button></td></tr>`).join('') : '';
-        }
+        const c = getData().clients.find(x => x.id === selectedClientId);
+        if (!c) return;
+        document.getElementById('clientDetailCard').style.display = 'block';
+        document.getElementById('clientDetailTitle').textContent = `📂 معاملات العميل: ${c.name}`;
+        const b = getClientBalance(c.id);
+        document.getElementById('clientBalanceSummary').innerHTML = `
+            <div class="badge badge-info">USD: ${formatNumber(b.USD)}</div>
+            <div class="badge badge-info">TRY: ${formatNumber(b.TRY)}</div>
+            <div class="badge badge-info">SYP: ${formatNumber(b.SYP)}</div>`;
+        const trans = getData().clientTransactions.filter(t => t.clientId === selectedClientId).sort((a, b) => b.date.localeCompare(a.date));
+        document.getElementById('clientTransactionsTable').innerHTML = trans.map(t => `
+            <tr><td>${t.date}</td><td><span class="badge ${t.type==='لنا'?'badge-success':'badge-danger'}">${t.type}</span></td>
+            <td><strong>${formatNumber(t.amount)}</strong></td><td>${t.currency}</td>
+            <td>
+                <button class="btn btn-outline btn-xs" onclick="editClientTransaction('${t.id}')" title="تعديل"><i class="fas fa-edit"></i></button>
+                <button class="btn btn-success btn-xs" onclick="shareTransactionViaWhatsApp('${t.id}')" title="واتساب"><i class="fab fa-whatsapp"></i></button>
+                <button class="btn btn-danger btn-xs" onclick="deleteClientTransaction('${t.id}')" title="حذف"><i class="fas fa-trash"></i></button>
+            </td></tr>`).join('');
+        renderClients();
+        document.getElementById('contentScroll').scrollTo({ top: document.getElementById('clientDetailCard').offsetTop - 20, behavior: 'smooth' });
     }
 
-    window.openClientTransactionModal = function(editId = null) {
+    window.closeClientDetail = () => { selectedClientId = null; document.getElementById('clientDetailCard').style.display = 'none'; renderClients(); };
+
+    window.shareTransactionViaWhatsApp = function(transId) {
         const data = getData();
-        const sel = document.getElementById('clientTransClient');
-        if (sel) {
-            sel.innerHTML = data.clients.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
-            if (editId) {
-                const t = data.clientTransactions.find(x => x.id === editId);
-                if (t) { sel.value = t.clientId; document.getElementById('clientTransType').value = t.type; document.getElementById('clientTransCurrency').value = t.currency; document.getElementById('clientTransAmount').value = t.amount; }
-            } else { if (selectedClientId) sel.value = selectedClientId; document.getElementById('clientTransAmount').value = ''; }
+        const t = data.clientTransactions.find(x => x.id === transId);
+        if (!t) return;
+        const c = data.clients.find(x => x.id === t.clientId);
+        if (!c) return;
+
+        const b = getClientBalance(c.id);
+        
+        // الحصول على اسم المكتب الحالي
+        let officeName = 'مكتب الرفاه';
+        if (currentUser && currentUser.role === 'office') {
+            const office = getOffices().find(o => o.id === currentUser.officeId);
+            if (office) officeName = office.name;
         }
-        document.getElementById('clientTransEditId').value = editId || '';
+
+        const liraBalance = b.TRY || 0;
+        const dollarBalance = b.USD || 0;
+        
+        const liraStatus = liraBalance >= 0 ? `دائن علينا` : `دائن لكم`;
+        const dollarStatus = dollarBalance >= 0 ? `دائن علينا` : `دائن لكم`;
+
+        const text = `*${officeName}*
+💵💵💵💵💵💵💵💵
+*الحساب:*
+*${c.name}*
+*الرصيد:*
+*ليرة تركي  ${formatNumber(Math.abs(liraBalance))} ${liraStatus}*
+*دولار امريكي  ${formatNumber(Math.abs(dollarBalance))} ${dollarStatus}*
+💵💵💵💵💵💵💵💵
+💰💰💰💰💰💰💰💰
+يرجى مطابقة هذه الأرصدة`;
+
+        const url = `https://wa.me/${c.phone || ''}?text=${encodeURIComponent(text)}`;
+        window.open(url, '_blank');
+    };
+
+    window.openClientTransactionModal = function(editId = null) {
+        const clientSelect = document.getElementById('clientTransClient');
+        if (!clientSelect) return;
+        
+        const clients = getData().clients;
+        clientSelect.innerHTML = clients.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
+        
         document.getElementById('clientTransModalOverlay').classList.add('show');
+        document.getElementById('clientTransEditId').value = editId || '';
+        
+        if (selectedClientId) {
+            clientSelect.value = selectedClientId;
+        }
+
+        if (editId) {
+            const t = getData().clientTransactions.find(x => x.id === editId);
+            if (t) { 
+                clientSelect.value = t.clientId;
+                document.getElementById('clientTransType').value = t.type; 
+                document.getElementById('clientTransCurrency').value = t.currency; 
+                document.getElementById('clientTransAmount').value = t.amount; 
+            }
+        } else { 
+            document.getElementById('clientTransAmount').value = ''; 
+        }
     };
 
     window.closeClientTransModal = () => document.getElementById('clientTransModalOverlay').classList.remove('show');
 
-    window.saveClientTransaction = function() {
+    window.saveClientTransaction = async function() {
         const clientId = document.getElementById('clientTransClient').value;
         const type = document.getElementById('clientTransType').value;
         const currency = document.getElementById('clientTransCurrency').value;
@@ -564,10 +585,18 @@
             addAuditEntry('تعديل', `تعديل قيد مالي للعميل ${client.name}`, `${amount} ${currency} (${type})`);
         }
         else {
-            data.clientTransactions.push({ id: 'ct' + Date.now(), clientId, type, currency, amount, date: new Date().toISOString().split('T')[0], officeId: currentUser ? currentUser.officeId : null });
+            data.clientTransactions.push({ 
+                id: 'ct' + Date.now(), 
+                clientId, 
+                type, 
+                currency, 
+                amount, 
+                date: new Date().toISOString().split('T')[0], 
+                officeId: currentUser.officeId 
+            });
             addAuditEntry('إضافة', `إضافة قيد مالي للعميل ${client.name}`, `${amount} ${currency} (${type})`);
         }
-        saveData(data);
+        await saveData(data);
         closeClientTransModal();
         if (selectedClientId) renderClientDetail();
         renderClients();
@@ -577,14 +606,14 @@
     window.editClientTransaction = (id) => openClientTransactionModal(id);
 
     window.deleteClientTransaction = (id) => {
-        Swal.fire({ title: 'هل أنت متأكد من حذف هذه المعاملة؟', icon: 'warning', showCancelButton: true, confirmButtonText: 'حذف', cancelButtonText: 'إلغاء', confirmButtonColor: '#e74c3c' }).then(r => {
+        Swal.fire({ title: 'هل أنت متأكد من حذف هذه المعاملة؟', icon: 'warning', showCancelButton: true, confirmButtonText: 'حذف', cancelButtonText: 'إلغاء', confirmButtonColor: '#e74c3c' }).then(async r => {
             if (r.isConfirmed) { 
                 const data = getData(); 
                 const t = data.clientTransactions.find(x => x.id === id);
                 const client = data.clients.find(c => c.id === t.clientId);
                 addAuditEntry('حذف', `حذف قيد مالي للعميل ${client.name}`, `${t.amount} ${t.currency}`);
                 data.clientTransactions = data.clientTransactions.filter(t => t.id !== id); 
-                saveData(data); 
+                await saveData(data); 
                 if (selectedClientId) renderClientDetail(); 
                 showToast('تم حذف المعاملة'); 
             }
@@ -597,27 +626,18 @@
         const totalCost = data.profits.reduce((s, p) => s + (p.buy || 0), 0);
         const totalExpenses = data.profits.reduce((s, p) => s + (p.expense || 0), 0);
         const net = totalRevenue - totalCost - totalExpenses;
-        
-        const statsElem = document.getElementById('reportStats');
-        if (statsElem) {
-            statsElem.innerHTML = `
-                <div class="stat-card"><div class="stat-icon gold">💰</div><div class="stat-info"><h4>صافي الربح</h4><div class="value">${formatNumber(net)}</div></div></div>
-                <div class="stat-card"><div class="stat-icon blue">📈</div><div class="stat-info"><h4>إجمالي الإيرادات</h4><div class="value">${formatNumber(totalRevenue)}</div></div></div>
-                <div class="stat-card"><div class="stat-icon red">📉</div><div class="stat-info"><h4>إجمالي التكاليف</h4><div class="value">${formatNumber(totalCost+totalExpenses)}</div></div></div>`;
-        }
-        
+        document.getElementById('reportStats').innerHTML = `
+            <div class="stat-card"><div class="stat-icon gold">💰</div><div class="stat-info"><h4>صافي الربح</h4><div class="value">${formatNumber(net)}</div></div></div>
+            <div class="stat-card"><div class="stat-icon blue">📈</div><div class="stat-info"><h4>الإيرادات</h4><div class="value">${formatNumber(totalRevenue)}</div></div></div>
+            <div class="stat-card"><div class="stat-icon red">📉</div><div class="stat-info"><h4>إجمالي التكاليف</h4><div class="value">${formatNumber(totalCost+totalExpenses)}</div></div></div>`;
         const sum = {};
         data.profits.forEach(p => { 
             if (!sum[p.currency]) sum[p.currency] = { count: 0, buy: 0, sell: 0, expense: 0, profit: 0 };
             sum[p.currency].count++; sum[p.currency].buy += p.buy || 0; sum[p.currency].sell += p.sell || 0; sum[p.currency].expense += p.expense || 0;
             sum[p.currency].profit += (p.sell || 0) - (p.buy || 0) - (p.expense || 0); 
         });
-        
-        const currencyTable = document.getElementById('currencySummaryTable');
-        if (currencyTable) {
-            currencyTable.innerHTML = Object.entries(sum).map(([cur, s]) => `
-                <tr><td><strong>${cur}</strong></td><td>${s.count}</td><td>${formatNumber(s.buy)}</td><td>${formatNumber(s.sell)}</td><td>${formatNumber(s.expense)}</td><td>${formatNumber(s.profit)}</td></tr>`).join('') || '<tr><td colspan="6">لا توجد سجلات حالية</td></tr>';
-        }
+        document.getElementById('currencySummaryTable').innerHTML = Object.entries(sum).map(([cur, s]) => `
+            <tr><td><strong>${cur}</strong></td><td>${s.count}</td><td>${formatNumber(s.buy)}</td><td>${formatNumber(s.sell)}</td><td>${formatNumber(s.expense)}</td><td>${formatNumber(s.profit)}</td></tr>`).join('') || '<tr><td colspan="6">لا توجد سجلات حالية</td></tr>';
     }
 
     window.exportToExcel = () => {
@@ -625,6 +645,7 @@
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(data.profits.map(p => ({ ...p, netProfit: (p.sell||0)-(p.buy||0)-(p.expense||0) }))), 'الأرباح');
         XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(data.clients.map(c => { const b = getClientBalance(c.id); return { ...c, ...b }; })), 'العملاء');
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(data.sellCut.map(s => ({ ...s, profitDisplay: formatNumber(s.profit) }))), 'بيع وقص');
         XLSX.writeFile(wb, 'تقرير_محاسبي_الرفاه.xlsx');
         showToast('تم التصدير إلى Excel');
         addAuditEntry('تصدير', 'تصدير البيانات إلى ملف Excel');
@@ -633,56 +654,28 @@
     window.exportToPDF = () => {
         const { jsPDF } = window.jspdf;
         const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
-        
         doc.addFileToVFS('Amiri-Regular.ttf', AMIRI_FONT);
         doc.addFont('Amiri-Regular.ttf', 'Amiri', 'normal');
         doc.setFont('Amiri');
-        
         const now = new Date();
         const dateStr = now.toLocaleDateString('ar-SA', { year: 'numeric', month: 'long', day: 'numeric' });
         const timeStr = now.toLocaleTimeString('ar-SA');
         const data = getData();
-        
         const offices = getOffices();
         let officeName = 'مكتب الرفاه المحاسبي';
         let managerName = 'المدير العام';
-        
         if (currentUser && currentUser.role === 'office') {
             const office = offices.find(o => o.id === currentUser.officeId);
-            if (office) {
-                officeName = office.name;
-                managerName = office.managerName;
-            }
+            if (office) { officeName = office.name; managerName = office.managerName; }
         } else if (currentUser && currentUser.role === 'admin') {
             officeName = 'مكتب الرفاه الرئيسي';
             managerName = 'المدير: ' + currentUser.username;
         }
-
-        doc.setFontSize(22);
-        doc.setTextColor(200, 150, 62);
-        doc.text(officeName, 148, 20, { align: 'center' });
-        
-        doc.setFontSize(14);
-        doc.setTextColor(100, 100, 100);
-        doc.text(managerName, 148, 28, { align: 'center' });
-        
-        doc.setFontSize(10);
-        doc.text('تاريخ التصدير: ' + dateStr + ' | ' + timeStr, 280, 35, { align: 'right' });
-        
-        doc.setDrawColor(200, 150, 62);
-        doc.setLineWidth(0.5);
-        doc.line(20, 38, 280, 38);
-        
-        const tableData = data.profits.map(p => [
-            p.date,
-            p.seller,
-            formatNumber(p.buy||0),
-            formatNumber(p.sell||0),
-            formatNumber(p.expense||0),
-            formatNumber((p.sell||0)-(p.buy||0)-(p.expense||0)),
-            p.currency
-        ]);
-        
+        doc.setFontSize(22); doc.setTextColor(200, 150, 62); doc.text(officeName, 148, 20, { align: 'center' });
+        doc.setFontSize(14); doc.setTextColor(100, 100, 100); doc.text(managerName, 148, 28, { align: 'center' });
+        doc.setFontSize(10); doc.text('تاريخ التصدير: ' + dateStr + ' | ' + timeStr, 280, 35, { align: 'right' });
+        doc.setDrawColor(200, 150, 62); doc.setLineWidth(0.5); doc.line(20, 38, 280, 38);
+        const tableData = data.profits.map(p => [p.date, p.seller, formatNumber(p.buy||0), formatNumber(p.sell||0), formatNumber(p.expense||0), formatNumber((p.sell||0)-(p.buy||0)-(p.expense||0)), p.currency]);
         doc.autoTable({
             head: [['التاريخ', 'البائع / الجهة', 'الشراء', 'البيع', 'المصروفات', 'الصافي', 'العملة']],
             body: tableData,
@@ -690,38 +683,39 @@
             theme: 'grid',
             styles: { font: 'Amiri', fontSize: 10, halign: 'right', cellPadding: 3 },
             headStyles: { fillColor: [200, 150, 62], textColor: 255, fontStyle: 'bold', halign: 'center' },
-            columnStyles: {
-                0: { halign: 'center' },
-                2: { halign: 'center' },
-                3: { halign: 'center' },
-                4: { halign: 'center' },
-                5: { halign: 'center' },
-                6: { halign: 'center' }
-            },
+            columnStyles: { 0: { halign: 'center' }, 2: { halign: 'center' }, 3: { halign: 'center' }, 4: { halign: 'center' }, 5: { halign: 'center' }, 6: { halign: 'center' } },
             margin: { left: 20, right: 20 }
         });
-        
-        const summaryY = doc.lastAutoTable.finalY + 15;
+        let summaryY = doc.lastAutoTable.finalY + 15;
+        if (data.sellCut && data.sellCut.length > 0) {
+            if (summaryY > 160) { doc.addPage(); summaryY = 20; }
+            doc.setFontSize(12); doc.setTextColor(200, 150, 62); doc.text('جدول عمليات البيع والقص', 280, summaryY, { align: 'right' });
+            const sellCutTableData = data.sellCut.map(s => [s.date, s.clientName, s.currency, formatNumber(s.amount), s.buyPrice, s.sellPrice, formatNumber(s.profit)]);
+            doc.autoTable({
+                head: [['التاريخ', 'العميل', 'العملة', 'المبلغ', 'سعر الشراء', 'سعر البيع', 'الربح ($)']],
+                body: sellCutTableData,
+                startY: summaryY + 8,
+                theme: 'grid',
+                styles: { font: 'Amiri', fontSize: 9, halign: 'right', cellPadding: 2 },
+                headStyles: { fillColor: [200, 150, 62], textColor: 255, fontStyle: 'bold', halign: 'center' },
+                columnStyles: { 0: { halign: 'center' }, 2: { halign: 'center' }, 3: { halign: 'center' }, 4: { halign: 'center' }, 5: { halign: 'center' }, 6: { halign: 'center' } },
+                margin: { left: 20, right: 20 }
+            });
+            summaryY = doc.lastAutoTable.finalY + 15;
+        }
         const finalY = summaryY > 180 ? 20 : summaryY;
         if (summaryY > 180) doc.addPage();
-        
-        doc.setFontSize(14);
-        doc.setTextColor(0, 0, 0);
-        
+        doc.setFontSize(14); doc.setTextColor(0, 0, 0);
         const totalRevenue = data.profits.reduce((s, p) => s + (p.sell || 0), 0);
         const totalCost = data.profits.reduce((s, p) => s + (p.buy || 0), 0);
         const totalExpenses = data.profits.reduce((s, p) => s + (p.expense || 0), 0);
-        const netProfit = totalRevenue - totalCost - totalExpenses;
-
+        const totalSellCutProfit = data.sellCut.reduce((s, sc) => s + (sc.profit || 0), 0);
+        const netProfit = totalRevenue - totalCost - totalExpenses + totalSellCutProfit;
         doc.text('ملخص التقرير المالي:', 280, finalY, { align: 'right' });
-        doc.setFontSize(11);
-        doc.text('إجمالي الإيرادات: ' + formatNumber(totalRevenue), 280, finalY + 10, { align: 'right' });
+        doc.setFontSize(11); doc.text('إجمالي الإيرادات: ' + formatNumber(totalRevenue), 280, finalY + 10, { align: 'right' });
         doc.text('إجمالي التكاليف والمصروفات: ' + formatNumber(totalCost + totalExpenses), 280, finalY + 18, { align: 'right' });
-        
-        doc.setFontSize(13);
-        doc.setTextColor(200, 150, 62);
-        doc.text('صافي الأرباح الكلي: ' + formatNumber(netProfit), 280, finalY + 28, { align: 'right' });
-        
+        if (totalSellCutProfit !== 0) doc.text('أرباح البيع والقص: ' + formatNumber(totalSellCutProfit), 280, finalY + 26, { align: 'right' });
+        doc.setFontSize(13); doc.setTextColor(200, 150, 62); doc.text('صافي الأرباح الكلي: ' + formatNumber(netProfit), 280, finalY + 34, { align: 'right' });
         doc.save('تقرير_' + officeName.replace(/ /g, '_') + '_' + now.toISOString().slice(0, 10) + '.pdf');
         showToast('تم تصدير التقرير باللغة العربية بنجاح');
         addAuditEntry('تصدير', 'تصدير تقرير PDF باللغة العربية');
@@ -742,11 +736,11 @@
         Swal.fire({ title: 'استيراد البيانات', text: 'سيتم استبدال كل البيانات الحالية للمنظومة بالكامل!', icon: 'warning', showCancelButton: true, confirmButtonText: 'نعم، استبدل', cancelButtonText: 'إلغاء', confirmButtonColor: '#c8963e' }).then(r => {
             if (r.isConfirmed) {
                 const reader = new FileReader();
-                reader.onload = (ev) => { 
+                reader.onload = async (ev) => { 
                     try { 
                         const d = JSON.parse(ev.target.result); 
                         if (d.profits && d.clients && d.clientTransactions) { 
-                            saveData(d); 
+                            await saveData(d); 
                             addAuditEntry('استيراد', 'استيراد نسخة احتياطية للبيانات');
                             refreshPage(); 
                             showToast('تم استيراد البيانات بنجاح'); 
@@ -761,21 +755,24 @@
     };
 
     function renderSettings() {
-        const s = getSettings();
-        document.getElementById('settingsUser').value = s.user;
-        document.getElementById('settingsPass').value = '********';
+        if (currentUser) {
+            document.getElementById('settingsUser').value = currentUser.username;
+            const adminSection = document.getElementById('adminOnlySettings');
+            if (adminSection) {
+                adminSection.style.display = currentUser.role === 'admin' ? 'block' : 'none';
+            }
+        }
     }
 
     window.resetAllData = () => {
-        Swal.fire({ title: 'حذف جميع البيانات؟', text: 'لن تتمكن من استعادة البيانات المحذوفة نهائياً!', icon: 'error', showCancelButton: true, confirmButtonText: 'نعم، حذف الكل', cancelButtonText: 'إلغاء', confirmButtonColor: '#e74c3c' }).then(r => { 
+        Swal.fire({ title: 'حذف جميع البيانات؟', text: 'لن تتمكن من استعادة البيانات المحذوفة نهائياً!', icon: 'error', showCancelButton: true, confirmButtonText: 'نعم، حذف الكل', cancelButtonText: 'إلغاء', confirmButtonColor: '#e74c3c' }).then(async r => { 
             if (r.isConfirmed) { 
-                saveData({ profits: [], clients: [], clientTransactions: [] }); 
+                await saveData({ profits: [], clients: [], clientTransactions: [] }); 
                 localStorage.removeItem(AUDIT_KEY);
-                addAuditEntry('تصفير', 'حذف جميع بيانات النظام وتصفير الحسابات');
-                selectedClientId = null; 
-                refreshPage(); 
-                showToast('تم تصفير جميع القيود والحسابات'); 
-            } 
+                addAuditEntry('تصفير', 'تصفير كافة البيانات من المنظومة');
+                refreshPage();
+                showToast('تم تصفير البيانات');
+            }
         });
     };
 
@@ -799,34 +796,23 @@
         const from = document.getElementById('convertFrom').value;
         const to = document.getElementById('convertTo').value;
         if (!amount) return;
-        
         const rates = getExchangeRates();
         let amountInUsd = amount;
         if (from === 'TRY') amountInUsd = amount / rates.usdToTry;
         if (from === 'SYP') amountInUsd = amount / rates.usdToSyp;
-        
         let result = amountInUsd;
         if (to === 'TRY') result = amountInUsd * rates.usdToTry;
         if (to === 'SYP') result = amountInUsd * rates.usdToSyp;
-        
         const resDiv = document.getElementById('conversionResult');
-        if (resDiv) {
-            resDiv.style.display = 'block';
-            resDiv.innerHTML = `النتيجة: <span style="color:var(--gold);">${formatNumber(result)}</span> ${to}`;
-        }
+        resDiv.style.display = 'block';
+        resDiv.innerHTML = `النتيجة: <span style="color:var(--gold);">${formatNumber(result)}</span> ${to}`;
     };
 
     function renderSmartStats() {
         const data = getData();
         const statsDiv = document.getElementById('smartStats');
-        if (!statsDiv) return;
-        
         let totalDebtUsd = 0;
-        data.clients.forEach(c => {
-            const b = getClientBalance(c.id);
-            totalDebtUsd += b.USD || 0;
-        });
-
+        data.clients.forEach(c => { const b = getClientBalance(c.id); totalDebtUsd += b.USD || 0; });
         statsDiv.innerHTML = `
             <div style="padding:15px;background:var(--surface-alt);border-radius:10px;border-right:4px solid var(--gold);">
                 <div style="font-size:0.8rem;color:var(--text-secondary);">إجمالي الديون المستحقة (لنا)</div>
@@ -835,14 +821,12 @@
             <div style="padding:15px;background:var(--surface-alt);border-radius:10px;border-right:4px solid var(--blue);">
                 <div style="font-size:0.8rem;color:var(--text-secondary);">أكثر العملاء نشاطاً</div>
                 <div style="font-size:1.1rem;font-weight:700;">${data.clients.length ? data.clients[0].name : '-'}</div>
-            </div>
-        `;
+            </div>`;
     }
 
     function renderAudit() {
         const logs = getAuditLog();
         const tbody = document.getElementById('auditTableBody');
-        if (!tbody) return;
         document.getElementById('auditEmpty').style.display = logs.length ? 'none' : 'block';
         tbody.innerHTML = logs.map(l => `
             <tr>
@@ -851,453 +835,526 @@
                 <td><span class="badge ${l.type==='حذف'?'badge-danger':l.type==='إضافة'?'badge-success':'badge-gold'}">${l.type}</span></td>
                 <td>${l.description}</td>
                 <td style="font-size:0.8rem;">${l.details}</td>
-            </tr>
-        `).join('');
+            </tr>`).join('');
     }
 
-    // ============ نظام إدارة المستخدمين والمصادقة المحدث والمضمون ============
-
-    window.handleLogin = function() {
-        const user = document.getElementById('loginUser').value.trim();
-        const pass = document.getElementById('loginPass').value.trim();
-
-        if (!user || !pass) {
-            Swal.fire({ title: 'يرجى ملء كافة الحقول', icon: 'warning' });
-            return;
+    window.handleLogin = async function() {
+        const userField = document.getElementById('loginUser');
+        const passField = document.getElementById('loginPass');
+        const user = userField.value.trim();
+        const pass = passField.value.trim();
+        if (!user || !pass) return Swal.fire({ title: 'خطأ', text: 'يرجى إدخال اسم المستخدم وكلمة المرور', icon: 'warning' });
+        Swal.fire({ title: 'جاري التحقق...', allowOutsideClick: false, didOpen: () => { Swal.showLoading(); } });
+        let users = getUsers();
+        if (firebaseInitialized && typeof getCloudUsers === 'function') {
+            try { users = await getCloudUsers(); localStorage.setItem(USERS_KEY, JSON.stringify(users)); }
+            catch (error) { console.warn('⚠️ فشل تحميل المستخدمين من Firebase'); }
         }
-
-        // 1. تجاوز مباشر وصارم لحساب المدير العام لضمان الدخول في كافة الحالات
-        if (user === 'alrfah' && pass === 'Mirage09..') {
-            currentUser = {
-                username: 'alrfah',
-                role: 'admin',
-                status: 'active',
-                createdAt: new Date().toISOString()
-            };
-
-            addAuditEntry('دخول', 'تسجيل دخول ناجح للمدير العام (تجاوز الأخطاء)');
-            
-            document.getElementById('loginOverlay').classList.add('hidden');
-            document.getElementById('appShell').style.display = 'flex';
-            
-            const settingsBtn = document.querySelector('.sidebar-nav a[data-page="settings"]');
-            const auditBtn = document.querySelector('.sidebar-nav a[data-page="audit"]');
-            const officesBtn = document.querySelector('.sidebar-nav a[data-page="offices"]');
-            
-            if (settingsBtn) settingsBtn.style.display = 'flex';
-            if (auditBtn) auditBtn.style.display = 'flex';
-            if (officesBtn) officesBtn.style.display = 'flex';
-            
-            refreshPage();
-            showToast(`مرحباً بك ${currentUser.username} 👋`);
-            return;
-        }
-
-        // 2. التحقق من بقية الحسابات المخزنة محلياً
-        const users = getUsers();
-        const found = users.find(u => u.username === user && u.password === pass);
+        console.log('Attempting login for:', user);
+        let found = users.find(u => u.username === user && u.password === pass);
         
+        // Fallback checks (Super Admin)
+        if (!found && user === 'alrfah' && pass === 'Mirage09..') found = { username: 'alrfah', password: 'Mirage09..', role: 'admin', status: 'active' };
+        
+        Swal.close();
         if (found) {
-            if (found.status === 'blocked') {
-                return Swal.fire({ title: 'حساب محظور', text: 'تم حظر هذا الحساب من قبل الإدارة', icon: 'error' });
-            }
-            
+            console.log('User found:', found.username);
+            if (found.status === 'blocked') return Swal.fire({ title: 'حساب محظور', icon: 'error' });
             currentUser = found;
             
-            // التحقق من صلاحية تاريخ المكاتب الفرعية
-            if (found.role === 'office') {
-                if (typeof isOfficeAccessAllowed === 'function' && !isOfficeAccessAllowed(found)) {
-                    Swal.fire({
-                        title: 'انتهت صلاحية الوصول',
-                        text: 'انتهت فترة الوصول المسموح بها لهذا المكتب أو الحساب محظور',
-                        icon: 'error',
-                        confirmButtonColor: '#c8963e'
-                    }).then(() => {
-                        currentUser = null;
-                        document.getElementById('loginOverlay').classList.remove('hidden');
-                        document.getElementById('appShell').style.display = 'none';
-                    });
-                    return;
+            // محاولة تحميل بيانات المكتب من السحابة عند الدخول
+            if (found.role === 'office' && firebaseInitialized && typeof getCloudData === 'function') {
+                try {
+                    const cloudData = await getCloudData(found.officeId);
+                    if (cloudData) {
+                        const raw = localStorage.getItem(STORAGE_KEY);
+                        let allData = raw ? JSON.parse(raw) : { profits: [], clients: [], clientTransactions: [] };
+                        
+                        // التأكد من أن البيانات السحابية تحتوي على مصفوفات
+                        const safeCloudProfits = cloudData.profits || [];
+                        const safeCloudClients = cloudData.clients || [];
+                        const safeCloudTransactions = cloudData.clientTransactions || [];
+
+                        // دمج البيانات السحابية مع المحلية (استبدال بيانات المكتب الحالي بالبيانات السحابية الأحدث)
+                        allData.profits = (allData.profits || []).filter(p => p.officeId !== found.officeId).concat(safeCloudProfits.map(p => ({...p, officeId: found.officeId})));
+                        allData.clients = (allData.clients || []).filter(c => c.officeId !== found.officeId).concat(safeCloudClients.map(c => ({...c, officeId: found.officeId})));
+                        allData.clientTransactions = (allData.clientTransactions || []).filter(t => t.officeId !== found.officeId).concat(safeCloudTransactions.map(t => ({...t, officeId: found.officeId})));
+                        
+                        localStorage.setItem(STORAGE_KEY, JSON.stringify(allData));
+                        console.log('✅ تم تحميل بيانات المكتب من السحابة:', cloudData);
+                    } else {
+                        console.log('ℹ️ لا توجد بيانات سحابية لهذا المكتب بعد');
+                    }
+                } catch (error) {
+                    console.error('❌ خطأ في تحميل البيانات السحابية:', error);
                 }
             }
 
-            addAuditEntry('دخول', `تسجيل دخول ناجح للمستخدم: ${found.username}`);
+            addAuditEntry('دخول', 'تسجيل دخول ناجح للنظام');
+            
+            // إعداد مستمع للمزامنة الحية إذا كان مكتباً
+            if (found.role === 'office' && firebaseInitialized && typeof setupDataListener === 'function') {
+                setupDataListener(found.officeId, (cloudData) => {
+                    const raw = localStorage.getItem(STORAGE_KEY);
+                    let allData = raw ? JSON.parse(raw) : { profits: [], clients: [], clientTransactions: [] };
+                    
+                    // تحديث البيانات المحلية بالبيانات القادمة من السحابة
+                    allData.profits = (allData.profits || []).filter(p => p.officeId !== found.officeId).concat((cloudData.profits || []).map(p => ({...p, officeId: found.officeId})));
+                    allData.clients = (allData.clients || []).filter(c => c.officeId !== found.officeId).concat((cloudData.clients || []).map(c => ({...c, officeId: found.officeId})));
+                    allData.clientTransactions = (allData.clientTransactions || []).filter(t => t.officeId !== found.officeId).concat((cloudData.clientTransactions || []).map(t => ({...t, officeId: found.officeId})));
+                    
+                    localStorage.setItem(STORAGE_KEY, JSON.stringify(allData));
+                    console.log('🔄 تم تحديث البيانات حياً من السحابة');
+                    
+                    // إعادة رندر الصفحة الحالية لتظهر التغييرات فوراً
+                    refreshPage();
+                });
+            }
+
+            if (found.role === 'admin' && firebaseInitialized) { try { await loadOfficesFromFirebase(); } catch (e) {} }
             document.getElementById('loginOverlay').classList.add('hidden');
             document.getElementById('appShell').style.display = 'flex';
-            
             const settingsBtn = document.querySelector('.sidebar-nav a[data-page="settings"]');
             const auditBtn = document.querySelector('.sidebar-nav a[data-page="audit"]');
             const officesBtn = document.querySelector('.sidebar-nav a[data-page="offices"]');
+            const analyticsBtn = document.querySelector('.sidebar-nav a[data-page="analytics"]');
+            const backupsBtn = document.querySelector('.sidebar-nav a[data-page="backups"]');
+            const securityBtn = document.querySelector('.sidebar-nav a[data-page="security"]');
             
-            if (found.role !== 'admin') {
-                if (settingsBtn) settingsBtn.style.display = 'none';
-                if (auditBtn) auditBtn.style.display = 'none';
+            // السماح للمكاتب والمدير بالوصول للصفحات الجديدة
+            const hasAccess = found.role === 'admin' || found.role === 'office';
+            
+            if (settingsBtn) settingsBtn.style.display = hasAccess ? 'flex' : 'none';
+            if (securityBtn) securityBtn.style.display = hasAccess ? 'flex' : 'none';
+            if (analyticsBtn) analyticsBtn.style.display = hasAccess ? 'flex' : 'none';
+            if (backupsBtn) backupsBtn.style.display = hasAccess ? 'flex' : 'none';
+            
+            if (auditBtn) auditBtn.style.display = found.role === 'admin' ? 'flex' : 'none';
+            if (officesBtn) officesBtn.style.display = found.role === 'admin' ? 'flex' : 'none';
+            if (found.role === 'office') {
                 if (officesBtn) officesBtn.style.display = 'none';
-            } else {
-                if (settingsBtn) settingsBtn.style.display = 'flex';
-                if (auditBtn) auditBtn.style.display = 'flex';
-                if (officesBtn) officesBtn.style.display = 'flex';
+                if (typeof isOfficeAccessAllowed === 'function' && !isOfficeAccessAllowed(found)) {
+                    Swal.fire({ title: 'انتهت صلاحية الوصول', text: 'انتهت فترة الوصول المسموح بها لهذا المكتب', icon: 'error', confirmButtonColor: '#c8963e' }).then(() => { handleLogout(); });
+                    return;
+                }
+            } else { if (officesBtn) officesBtn.style.display = 'flex'; }
+            // تحديث عرض اسم المستخدم/المكتب
+            let displayName = found.username;
+            if (found.role === 'office') {
+                const offices = getOffices();
+                const office = offices.find(o => o.id === found.officeId);
+                if (office) displayName = office.name;
+            } else if (found.username === 'alrfah') {
+                displayName = 'المدير العام';
             }
+            document.getElementById('currentUserNameDisplay').textContent = displayName;
             
-            refreshPage();
-            showToast(`مرحباً بك ${found.username} 👋`);
-        } else {
-            Swal.fire({ title: 'بيانات الدخول غير صحيحة', icon: 'error' });
+            navigateTo('dashboard');
+        } else { 
+            console.log('Login failed for:', user);
+            Swal.fire({ 
+                title: 'خطأ في الدخول', 
+                text: 'اسم المستخدم أو كلمة المرور غير صحيحة. يرجى التأكد من البيانات والمحاولة مرة أخرى.', 
+                icon: 'error',
+                footer: `المستخدم المحاول: ${user}`
+            }); 
         }
     };
 
     window.handleLogout = function() {
-        Swal.fire({ title: 'تسجيل الخروج', icon: 'question', showCancelButton: true, confirmButtonText: 'خروج', cancelButtonText: 'إلغاء' }).then(r => { 
-            if (r.isConfirmed) { 
-                addAuditEntry('خروج', 'تسجيل خروج من النظام');
-                document.getElementById('loginOverlay').classList.remove('hidden'); 
-                document.getElementById('appShell').style.display = 'none'; 
-                currentUser = null;
-            } 
-        });
+        currentUser = null;
+        document.getElementById('loginOverlay').classList.remove('hidden');
+        document.getElementById('appShell').style.display = 'none';
+        document.getElementById('loginUser').value = '';
+        document.getElementById('loginPass').value = '';
     };
 
-    window.openUsersModal = function() {
-        if (currentUser?.role !== 'admin') return;
-        document.getElementById('usersModalOverlay').classList.add('show');
-        renderUsersList();
-    };
-
-    window.closeUsersModal = () => document.getElementById('usersModalOverlay').classList.remove('show');
-
-    function renderUsersList() {
-        const users = getUsers();
-        const tbody = document.getElementById('usersTableBody');
-        if (!tbody) return;
-        tbody.innerHTML = users.map(u => `
-            <tr>
-                <td><strong>${u.username}</strong> ${u.role === 'admin' ? '<span class="badge badge-info">مدير</span>' : ''}</td>
-                <td><span class="badge ${u.status === 'active' ? 'badge-success' : 'badge-danger'}">${u.status === 'active' ? 'نشط' : 'محظور'}</span></td>
-                <td>${new Date(u.createdAt).toLocaleDateString('ar-SA')}</td>
-                <td>
-                    ${u.role !== 'admin' ? `
-                        <button class="btn btn-outline btn-xs" onclick="toggleUserStatus('${u.username}')"><i class="fas fa-ban"></i></button>
-                        <button class="btn btn-danger btn-xs" onclick="deleteUser('${u.username}')"><i class="fas fa-trash"></i></button>
-                    ` : '-'}
-                </td>
-            </tr>
-        `).join('');
-    }
-
-    window.addNewUser = function() {
-        const user = document.getElementById('newUsername').value.trim();
-        const pass = document.getElementById('newUserPassword').value.trim();
-        if (!user || !pass) return;
-        const users = getUsers();
-        if (users.find(u => u.username === user)) return Swal.fire({ title: 'المستخدم موجود', icon: 'error' });
-        users.push({ username: user, password: pass, role: 'user', status: 'active', createdAt: new Date().toISOString() });
-        saveUsers(users);
-        addAuditEntry('إدارة', `إنشاء مستخدم جديد: ${user}`);
-        renderUsersList();
-        showToast('تم إضافة المستخدم');
-        document.getElementById('newUsername').value = '';
-        document.getElementById('newUserPassword').value = '';
-    };
-
-    window.toggleUserStatus = function(username) {
-        const users = getUsers();
-        const u = users.find(x => x.username === username);
-        if (u) {
-            u.status = u.status === 'active' ? 'blocked' : 'active';
-            saveUsers(users);
-            addAuditEntry('إدارة', `تغيير حالة المستخدم ${username} إلى ${u.status}`);
-            renderUsersList();
-        }
-    };
-
-    window.deleteUser = function(username) {
-        Swal.fire({ title: 'حذف؟', icon: 'warning', showCancelButton: true }).then(r => {
-            if (r.isConfirmed) {
-                let users = getUsers();
-                users = users.filter(u => u.username !== username);
-                saveUsers(users);
-                addAuditEntry('إدارة', `حذف المستخدم ${username}`);
-                renderUsersList();
-            }
-        });
-    };
-
-    // ============ نظام التحقق من صلاحيات المكاتب والتواريخ ============
-
-    function isOfficeAccessAllowed(user) {
-        if (!user || user.role !== 'office') return true;
-        
-        const offices = getOffices();
-        const office = offices.find(o => o.username === user.username);
-        
-        if (!office) return false;
-        
-        const now = new Date();
-        const curY = now.getFullYear();
-        const curM = now.getMonth() + 1;
-        
-        const startY = parseInt(office.startYear);
-        const startM = parseInt(office.startMonth);
-        const endY = parseInt(office.endYear);
-        const endM = parseInt(office.endMonth);
-
-        const currentTotal = curY * 12 + curM;
-        const startTotal = startY * 12 + startM;
-        const endTotal = endY * 12 + endM;
-        
-        return currentTotal >= startTotal && currentTotal <= endTotal;
-    }
-
-    function generateOfficeId() {
-        return 'office_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
-    }
-
-    function getOffices() {
-        const raw = localStorage.getItem(OFFICES_KEY);
-        return raw ? JSON.parse(raw) : [];
-    }
-
+    const OFFICES_KEY = 'alrefah_offices_list';
+    function getOffices() { const raw = localStorage.getItem(OFFICES_KEY); return raw ? JSON.parse(raw) : []; }
     function saveOffices(offices) {
         localStorage.setItem(OFFICES_KEY, JSON.stringify(offices));
+        if (typeof saveCloudOffices === 'function' && firebaseInitialized) {
+            saveCloudOffices(offices).then(() => console.log('✅ تم حفظ المكاتب في Firebase')).catch(e => console.warn('⚠️ فشل حفظ المكاتب في Firebase'));
+        }
+    }
+    async function loadOfficesFromFirebase() {
+        if (typeof getCloudOffices === 'function' && firebaseInitialized) {
+            try { const offices = await getCloudOffices(); localStorage.setItem(OFFICES_KEY, JSON.stringify(offices)); return offices; }
+            catch (e) { return getOffices(); }
+        }
+        return getOffices();
+    }
+    async function loadUsersFromFirebase() {
+        if (typeof getCloudUsers === 'function' && firebaseInitialized) {
+            try { const users = await getCloudUsers(); localStorage.setItem(USERS_KEY, JSON.stringify(users)); return users; }
+            catch (e) { return getUsers(); }
+        }
+        return getUsers();
     }
 
+    window.renderOffices = function() {
+        const offices = getOffices();
+        const tbody = document.getElementById('officesTableBody');
+        if (!tbody) return;
+        document.getElementById('officesEmpty').style.display = offices.length ? 'none' : 'block';
+        tbody.innerHTML = offices.map(o => `
+            <tr>
+                <td><strong>${o.name}</strong></td><td>${o.managerName}</td><td>${o.username}</td>
+                <td><span class="badge ${o.status==='active'?'badge-success':'badge-danger'}">${o.status==='active'?'نشط':'محظور'}</span></td>
+                <td>${o.startYear}-${o.startMonth}</td><td>${o.endYear}-${o.endMonth}</td>
+                <td>
+                    <button class="btn btn-outline btn-xs" onclick="openOfficeModal('${o.id}')"><i class="fas fa-edit"></i></button>
+                    <button class="btn btn-danger btn-xs" onclick="deleteOffice('${o.id}')"><i class="fas fa-trash"></i></button>
+                </td>
+            </tr>`).join('');
+    };
+
     window.openOfficeModal = function(editId = null) {
-        document.getElementById('officeModalOverlay').classList.add('show');
+        const modalOverlay = document.getElementById('officeModalOverlay');
+        if (!modalOverlay) return;
+        modalOverlay.classList.add('show');
         document.getElementById('officeEditId').value = editId || '';
-        document.getElementById('officeModalTitle').textContent = editId ? '✏️ تعديل المكتب' : '➕ إضافة مكتب جديد';
-        
+        document.getElementById('officeModalTitle').textContent = editId ? '✏️ تعديل بيانات المكتب' : '➕ إضافة مكتب جديد';
         if (editId) {
-            const office = getOffices().find(o => o.id === editId);
-            if (office) {
-                document.getElementById('officeName').value = office.name;
-                document.getElementById('officeManagerName').value = office.managerName;
-                document.getElementById('officeUsername').value = office.username;
-                document.getElementById('officePassword').value = office.password;
-                document.getElementById('officeStartMonth').value = office.startMonth;
-                document.getElementById('officeStartYear').value = office.startYear;
-                document.getElementById('officeEndMonth').value = office.endMonth;
-                document.getElementById('officeEndYear').value = office.endYear;
+            const o = getOffices().find(x => x.id === editId);
+            if (o) {
+                document.getElementById('officeName').value = o.name;
+                document.getElementById('officeManagerName').value = o.managerName;
+                document.getElementById('officeUsername').value = o.username;
+                document.getElementById('officePassword').value = o.password;
+                document.getElementById('officeStartMonth').value = o.startMonth;
+                document.getElementById('officeStartYear').value = o.startYear;
+                document.getElementById('officeEndMonth').value = o.endMonth;
+                document.getElementById('officeEndYear').value = o.endYear;
             }
         } else {
             document.getElementById('officeName').value = '';
             document.getElementById('officeManagerName').value = '';
             document.getElementById('officeUsername').value = '';
             document.getElementById('officePassword').value = '';
-            const now = new Date();
-            document.getElementById('officeStartMonth').value = now.getMonth() + 1;
-            document.getElementById('officeStartYear').value = now.getFullYear();
+            document.getElementById('officeStartMonth').value = 1;
+            document.getElementById('officeStartYear').value = 2026;
             document.getElementById('officeEndMonth').value = 12;
-            document.getElementById('officeEndYear').value = now.getFullYear() + 1;
+            document.getElementById('officeEndYear').value = 2026;
         }
     };
 
-    window.closeOfficeModal = () => document.getElementById('officeModalOverlay').classList.remove('show');
+    window.closeOfficeModal = () => {
+        const modalOverlay = document.getElementById('officeModalOverlay');
+        if (modalOverlay) modalOverlay.classList.remove('show');
+    };
 
-    window.saveOffice = function() {
-        const name = document.getElementById('officeName').value.trim();
-        const managerName = document.getElementById('officeManagerName').value.trim();
-        const username = document.getElementById('officeUsername').value.trim();
-        const password = document.getElementById('officePassword').value.trim();
-        const startMonth = document.getElementById('officeStartMonth').value;
-        const startYear = document.getElementById('officeStartYear').value;
-        const endMonth = document.getElementById('officeEndMonth').value;
-        const endYear = document.getElementById('officeEndYear').value;
-        const editId = document.getElementById('officeEditId').value;
-
-        if (!name || !managerName || !username || !password || !startYear || !endYear) {
-            return Swal.fire({ title: 'جميع الحقول مطلوبة', icon: 'error' });
-        }
-
+    window.saveOffice = async function() {
+        const id = document.getElementById('officeEditId').value;
+        const office = {
+            id: id || 'off' + Date.now(),
+            name: document.getElementById('officeName').value.trim(),
+            managerName: document.getElementById('officeManagerName').value.trim(),
+            username: document.getElementById('officeUsername').value.trim(),
+            password: document.getElementById('officePassword').value.trim(),
+            startMonth: +document.getElementById('officeStartMonth').value,
+            startYear: +document.getElementById('officeStartYear').value,
+            endMonth: +document.getElementById('officeEndMonth').value,
+            endYear: +document.getElementById('officeEndYear').value,
+            status: 'active'
+        };
+        if (!office.name || !office.username || !office.password) return Swal.fire({ title: 'الرجاء إكمال كافة الحقول', icon: 'warning' });
         let offices = getOffices();
+        if (id) { const idx = offices.findIndex(o => o.id === id); if (idx >= 0) offices[idx] = office; }
+        else offices.push(office);
+        saveOffices(offices);
+        
         let users = getUsers();
-
-        if (!editId && users.find(u => u.username === username)) {
-            return Swal.fire({ title: 'اسم المستخدم موجود بالفعل', icon: 'error' });
-        }
-
-        if (editId) {
-            const officeIndex = offices.findIndex(o => o.id === editId);
-            if (officeIndex !== -1) {
-                const oldUsername = offices[officeIndex].username;
-                offices[officeIndex] = {
-                    id: editId,
-                    name,
-                    managerName,
-                    username,
-                    password,
-                    startMonth,
-                    startYear,
-                    endMonth,
-                    endYear,
-                    status: offices[officeIndex].status,
-                    createdAt: offices[officeIndex].createdAt,
-                    updatedAt: new Date().toISOString()
-                };
-
-                const userIndex = users.findIndex(u => u.username === oldUsername);
-                if (userIndex !== -1) {
-                    users[userIndex].username = username;
-                    users[userIndex].password = password;
-                }
-
-                saveOffices(offices);
-                saveUsers(users);
-                addAuditEntry('تعديل', `تعديل بيانات المكتب: ${name}`, `المدير: ${managerName}`);
-                showToast('تم تحديث بيانات المكتب بنجاح');
-            }
-        } else {
-            const newOffice = {
-                id: generateOfficeId(),
-                name,
-                managerName,
-                username,
-                password,
-                startMonth,
-                startYear,
-                endMonth,
-                endYear,
-                status: 'active',
-                createdAt: new Date().toISOString(),
-                updatedAt: new Date().toISOString()
-            };
-
-            offices.push(newOffice);
-
-            users.push({
-                username,
-                password,
-                role: 'office',
-                status: 'active',
-                officeId: newOffice.id,
-                createdAt: new Date().toISOString()
-            });
-
-            saveOffices(offices);
-            saveUsers(users);
-            addAuditEntry('إضافة', `إنشاء مكتب جديد: ${name}`, `المدير: ${managerName}, اليوزر: ${username}`);
-            showToast('تم إنشاء المكتب بنجاح');
-        }
-
+        const userIdx = users.findIndex(u => u.username === office.username);
+        const newUser = { username: office.username, password: office.password, role: 'office', officeId: office.id, status: 'active' };
+        if (userIdx >= 0) users[userIdx] = newUser; else users.push(newUser);
+        saveUsers(users);
+        
         closeOfficeModal();
         renderOffices();
+        showToast('تم حفظ بيانات المكتب والمستخدم بنجاح');
     };
 
-    window.deleteOffice = function(officeId) {
-        Swal.fire({
-            title: 'حذف المكتب؟',
-            text: 'سيتم حذف المكتب وحساب المستخدم التابع له',
-            icon: 'warning',
-            showCancelButton: true,
-            confirmButtonText: 'نعم، احذف',
-            cancelButtonText: 'إلغاء',
-            confirmButtonColor: '#e74c3c'
-        }).then(r => {
+    window.deleteOffice = function(id) {
+        Swal.fire({ title: 'حذف المكتب؟', text: 'سيتم حذف المكتب وكل المستخدمين المرتبطين به!', icon: 'warning', showCancelButton: true, confirmButtonText: 'حذف', confirmButtonColor: '#e74c3c' }).then(async r => {
             if (r.isConfirmed) {
-                let offices = getOffices();
-                let users = getUsers();
-                
-                const office = offices.find(o => o.id === officeId);
+                const office = getOffices().find(o => o.id === id);
+                let offices = getOffices().filter(o => o.id !== id);
+                saveOffices(offices);
                 if (office) {
-                    users = users.filter(u => u.username !== office.username);
-                    offices = offices.filter(o => o.id !== officeId);
-                    
-                    saveOffices(offices);
+                    let users = getUsers().filter(u => u.username !== office.username);
                     saveUsers(users);
-                    addAuditEntry('حذف', `حذف المكتب: ${office.name}`, `المدير: ${office.managerName}`);
-                    showToast('تم حذف المكتب بنجاح');
-                    renderOffices();
                 }
+                renderOffices();
+                showToast('تم حذف المكتب');
             }
         });
     };
 
-    window.toggleOfficeStatus = function(officeId) {
-        let offices = getOffices();
-        const office = offices.find(o => o.id === officeId);
-        
-        if (office) {
-            const newStatus = office.status === 'active' ? 'blocked' : 'active';
-            office.status = newStatus;
-            office.updatedAt = new Date().toISOString();
-            
-            let users = getUsers();
-            const user = users.find(u => u.username === office.username);
-            if (user) {
-                user.status = newStatus;
-            }
-            
-            saveOffices(offices);
-            saveUsers(users);
-            addAuditEntry('إدارة', `${newStatus === 'blocked' ? 'حظر' : 'تفعيل'} المكتب: ${office.name}`);
-            showToast(newStatus === 'blocked' ? 'تم حظر المكتب' : 'تم تفعيل المكتب');
-            renderOffices();
-        }
+    window.syncAllDataToFirebase = async function() {
+        if (!firebaseInitialized) return showToast('❌ Firebase غير متصل');
+        try {
+            await saveCloudUsers(getUsers());
+            await saveCloudOffices(getOffices());
+            showToast('✅ تمت مزامنة جميع البيانات بنجاح');
+        } catch (e) { showToast('❌ فشلت المزامنة'); }
     };
 
-    function renderOffices() {
-        const offices = getOffices();
-        const tbody = document.getElementById('officesTableBody');
-        const emptyState = document.getElementById('officesEmpty');
-
-        if (!tbody) return;
-
-        if (offices.length === 0) {
-            tbody.innerHTML = '';
-            if (emptyState) emptyState.style.display = 'block';
-            return;
+    window.addEventListener('load', async () => {
+        if (firebaseInitialized) {
+            try { 
+                await loadUsersFromFirebase(); 
+                await loadOfficesFromFirebase(); 
+            }
+            catch (e) {}
+        }
+        applyTheme();
+        
+        // تحديث اسم المستخدم المعروض إذا كان مسجلاً للدخول
+        if (currentUser) {
+            let displayName = currentUser.username;
+            if (currentUser.role === 'office') {
+                const offices = getOffices();
+                const office = offices.find(o => o.id === currentUser.officeId);
+                if (office) displayName = office.name;
+            } else if (currentUser.username === 'alrfah') {
+                displayName = 'المدير العام';
+            }
+            const displayElem = document.getElementById('currentUserNameDisplay');
+            if (displayElem) displayElem.textContent = displayName;
         }
 
-        if (emptyState) emptyState.style.display = 'none';
-        
-        const monthNames = ['', 'يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو', 'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'];
-        
-        tbody.innerHTML = offices.map(office => `
-            <tr>
-                <td><strong>${office.name}</strong></td>
-                <td>${office.managerName}</td>
-                <td><code style="background:var(--surface-alt);padding:4px 8px;border-radius:4px;font-size:0.85rem;">${office.username}</code></td>
-                <td><span class="badge ${office.status === 'active' ? 'badge-success' : 'badge-danger'}">${office.status === 'active' ? 'نشط' : 'محظور'}</span></td>
-                <td style="font-size:0.9rem;">${monthNames[parseInt(office.startMonth)]} ${office.startYear}</td>
-                <td style="font-size:0.9rem;">${monthNames[parseInt(office.endMonth)]} ${office.endYear}</td>
-                <td style="display:flex;gap:4px;flex-wrap:wrap;">
-                    <button class="btn btn-primary btn-xs" onclick="openOfficeModal('${office.id}')" title="تعديل"><i class="fas fa-edit"></i></button>
-                    <button class="btn btn-outline btn-xs" onclick="toggleOfficeStatus('${office.id}')" title="${office.status === 'active' ? 'حظر' : 'تفعيل'}"><i class="fas fa-${office.status === 'active' ? 'ban' : 'check'}"></i></button>
-                    <button class="btn btn-danger btn-xs" onclick="deleteOffice('${office.id}')" title="حذف"><i class="fas fa-trash"></i></button>
-                </td>
-            </tr>
-        `).join('');
-    }
-
-    // ============ الاستماع للأحداث (Event Listeners) ============
-    document.addEventListener('keydown', (e) => { 
-        if (e.key === 'Escape') { 
-            closeProfitModal(); 
-            closeClientModal(); 
-            closeClientTransModal(); 
-            closeSidebar(); 
-            closeUsersModal(); 
-            closeOfficeModal(); 
-        } 
+        // تحقق من الصلاحية عند تحميل الصفحة
+        if (typeof window.checkAndForceLogoutIfExpired === 'function') {
+            window.checkAndForceLogoutIfExpired();
+        }
     });
-
-    document.querySelectorAll('.modal-overlay').forEach(o => {
-        o.addEventListener('click', function(e) { 
-            if (e.target === this) this.classList.remove('show'); 
-        });
-    });
-
-    const loginPassElem = document.getElementById('loginPass');
-    if (loginPassElem) {
-        loginPassElem.addEventListener('keydown', (e) => { 
-            if (e.key === 'Enter') handleLogin(); 
-        });
-    }
-
-    window.toggleSidebar = toggleSidebar;
-    window.closeSidebar = closeSidebar;
-    window.navigateTo = navigateTo;
-    window.toggleTheme = toggleTheme;
-    window.handleGlobalSearch = handleGlobalSearch;
-
-    applyTheme();
 })();
+
+    // ==========================================
+    // --- Sell and Cut Functions (New Section) ---
+    // ==========================================
+    window.calculateSellCutProfit = function() {
+        const amount = parseFloat(document.getElementById('sellCutAmount').value) || 0;
+        const buyPrice = parseFloat(document.getElementById('sellCutBuyPrice').value) || 0;
+        const sellPrice = parseFloat(document.getElementById('sellCutSellPrice').value) || 0;
+        let profit = 0;
+        if (amount > 0 && buyPrice > 0 && sellPrice > 0) {
+            // العملية: (المبلغ / سعر البيع) - (المبلغ / سعر الشراء)
+            // مثال: (4000 / 45.9) - (4000 / 46) = 87.146 - 86.956 = 0.19 دولار
+            profit = (amount / sellPrice) - (amount / buyPrice);
+        }
+        const liveProfitElem = document.getElementById('sellCutLiveProfit');
+        if (liveProfitElem) {
+            liveProfitElem.innerHTML = `الربح المتوقع: <span style="color:var(--gold); font-size:1.2rem;">${formatNumber(profit)} $</span>`;
+        }
+        return profit;
+    };
+
+    window.openSellCutModal = function(editId = null) {
+        const data = getData();
+        const clientSelect = document.getElementById('sellCutClient');
+        if (clientSelect) {
+            clientSelect.innerHTML = data.clients.map(c => `<option value="${c.id}">${c.name}</option>`).join('') || '<option value="">لا يوجد عملاء</option>';
+        }
+        
+        const modalOverlay = document.getElementById('sellCutModalOverlay');
+        if (modalOverlay) modalOverlay.classList.add('show');
+        
+        const editIdInput = document.getElementById('sellCutEditId');
+        if (editIdInput) editIdInput.value = editId || '';
+        
+        const titleElem = document.getElementById('sellCutModalTitle');
+        if (titleElem) titleElem.textContent = editId ? '✏️ تعديل عملية بيع وقص' : '➕ إضافة عملية بيع وقص';
+        
+        if (editId) {
+            const s = data.sellCut.find(x => x.id === editId);
+            if (s) {
+                if (document.getElementById('sellCutClient')) document.getElementById('sellCutClient').value = s.clientId;
+                if (document.getElementById('sellCutCurrency')) document.getElementById('sellCutCurrency').value = s.currency;
+                if (document.getElementById('sellCutAmount')) document.getElementById('sellCutAmount').value = s.amount;
+                if (document.getElementById('sellCutBuyPrice')) document.getElementById('sellCutBuyPrice').value = s.buyPrice;
+                if (document.getElementById('sellCutSellPrice')) document.getElementById('sellCutSellPrice').value = s.sellPrice;
+                calculateSellCutProfit();
+            }
+        } else {
+            if (document.getElementById('sellCutAmount')) document.getElementById('sellCutAmount').value = '';
+            if (document.getElementById('sellCutBuyPrice')) document.getElementById('sellCutBuyPrice').value = '';
+            if (document.getElementById('sellCutSellPrice')) document.getElementById('sellCutSellPrice').value = '';
+            const liveProfitElem = document.getElementById('sellCutLiveProfit');
+            if (liveProfitElem) liveProfitElem.textContent = 'الربح المتوقع: 0.00 $';
+        }
+    };
+
+    window.closeSellCutModal = function() { 
+        const modalOverlay = document.getElementById('sellCutModalOverlay');
+        if (modalOverlay) modalOverlay.classList.remove('show'); 
+    };
+
+    window.quickAddClient = async function() {
+        const { value: name } = await Swal.fire({
+            title: 'إضافة عميل سريع', input: 'text', inputLabel: 'اسم العميل', showCancelButton: true, confirmButtonText: 'إضافة', cancelButtonText: 'إلغاء'
+        });
+        if (name) {
+            const data = getData();
+            const newClient = { id: Date.now().toString(), name, phone: '', address: '', createdAt: new Date().toISOString() };
+            data.clients.push(newClient);
+            await saveData(data);
+            const editId = document.getElementById('sellCutEditId') ? document.getElementById('sellCutEditId').value : null;
+            openSellCutModal(editId);
+            showToast('تم إضافة العميل بنجاح');
+        }
+    };
+
+    window.saveSellCut = async function() {
+        const clientId = document.getElementById('sellCutClient').value;
+        const currency = document.getElementById('sellCutCurrency').value;
+        const amountInput = document.getElementById('sellCutAmount');
+        const buyPriceInput = document.getElementById('sellCutBuyPrice');
+        const sellPriceInput = document.getElementById('sellCutSellPrice');
+        const amount = parseFloat(amountInput.value);
+        const buyPrice = parseFloat(buyPriceInput.value);
+        const sellPrice = parseFloat(sellPriceInput.value);
+        const editId = document.getElementById('sellCutEditId').value;
+        
+        if (!clientId || isNaN(amount) || isNaN(buyPrice) || isNaN(sellPrice)) return Swal.fire('تنبيه', 'يرجى إكمال جميع الحقول بأرقام صحيحة', 'warning');
+        
+        const data = getData();
+        const profit = (amount / sellPrice) - (amount / buyPrice);
+        const entry = {
+            id: editId || Date.now().toString(), clientId,
+            clientName: data.clients.find(c => c.id === clientId)?.name || 'غير معروف',
+            currency, amount, buyPrice, sellPrice, profit,
+            date: new Date().toISOString().split('T')[0], timestamp: new Date().toISOString()
+        };
+        
+        if (editId) {
+            const idx = data.sellCut.findIndex(x => x.id === editId);
+            if (idx !== -1) data.sellCut[idx] = { ...data.sellCut[idx], ...entry };
+        } else {
+            data.sellCut.unshift(entry);
+        }
+        
+        await saveData(data);
+        closeSellCutModal(); renderSellCut();
+        showToast(editId ? 'تم تعديل العملية' : 'تم إضافة العملية بنجاح');
+        addAuditEntry(editId ? 'تعديل' : 'إضافة', `عملية بيع وقص للعميل ${entry.clientName}`, `المبلغ: ${amount} ${currency}`);
+    };
+
+    window.deleteSellCut = async function(id) {
+        const result = await Swal.fire({
+            title: 'هل أنت متأكد؟', text: 'سيتم حذف هذه العملية نهائياً', icon: 'warning', showCancelButton: true, confirmButtonColor: '#d33', confirmButtonText: 'نعم، احذف', cancelButtonText: 'إلغاء'
+        });
+        if (result.isConfirmed) {
+            const data = getData();
+            data.sellCut = data.sellCut.filter(x => x.id !== id);
+            await saveData(data); renderSellCut();
+            showToast('تم حذف العملية');
+        }
+    };
+
+    window.renderSellCut = function() {
+        const data = getData();
+        const yearFilter = document.getElementById('sellCutFilterYear');
+        const monthFilterElem = document.getElementById('sellCutFilterMonth');
+        const dateFilterElem = document.getElementById('sellCutFilterDate');
+        
+        if (!yearFilter || !monthFilterElem || !dateFilterElem) return;
+        
+        const monthFilter = monthFilterElem.value;
+        const dateFilter = dateFilterElem.value;
+        
+        if (yearFilter.options.length === 0) {
+            const years = [...new Set(data.sellCut.map(s => s.date.split('-')[0]))];
+            if (years.length === 0) years.push(new Date().getFullYear().toString());
+            yearFilter.innerHTML = years.map(y => `<option value="${y}">${y}</option>`).join('');
+            yearFilter.value = new Date().getFullYear().toString();
+        }
+        
+        const selectedYear = yearFilter.value;
+        let filtered = data.sellCut.filter(s => {
+            const [y, m] = s.date.split('-');
+            return y === selectedYear && (monthFilter === 'all' || parseInt(m) === parseInt(monthFilter)) && (!dateFilter || s.date === dateFilter);
+        });
+        
+        const table = document.getElementById('sellCutTable');
+        const empty = document.getElementById('sellCutEmpty');
+        if (table) {
+            if (filtered.length === 0) {
+                table.innerHTML = ''; if (empty) empty.style.display = 'block';
+            } else {
+                if (empty) empty.style.display = 'none';
+                table.innerHTML = filtered.map(s => `
+                    <tr>
+                        <td>${s.date}</td><td><strong>${s.clientName}</strong></td><td>${s.currency}</td>
+                        <td>${formatNumber(s.amount)}</td><td>${s.buyPrice}</td><td>${s.sellPrice}</td>
+                        <td style="color:var(--gold); font-weight:bold;">${formatNumber(s.profit)}</td>
+                        <td>
+                            <button class="btn btn-outline btn-xs" onclick="openSellCutModal('${s.id}')"><i class="fas fa-edit"></i></button>
+                            <button class="btn btn-outline btn-xs text-danger" onclick="deleteSellCut('${s.id}')"><i class="fas fa-trash"></i></button>
+                        </td>
+                    </tr>
+                `).join('');
+            }
+        }
+        
+        const summaryElem = document.getElementById('sellCutSummary');
+        if (summaryElem) {
+            const totalProfit = filtered.reduce((sum, s) => sum + s.profit, 0);
+            const totalAmount = filtered.reduce((sum, s) => sum + s.amount, 0);
+            summaryElem.innerHTML = `
+                <div class="stat-card"><div class="stat-icon gold">💰</div><div class="stat-info"><h4>إجمالي أرباح القص</h4><div class="value" style="color:var(--gold);">${formatNumber(totalProfit)} $</div></div></div>
+                <div class="stat-card"><div class="stat-icon blue">📈</div><div class="stat-info"><h4>إجمالي المبالغ</h4><div class="value">${formatNumber(totalAmount)}</div></div></div>
+                <div class="stat-card"><div class="stat-icon purple">📊</div><div class="stat-info"><h4>عدد العمليات</h4><div class="value">${filtered.length}</div></div></div>
+            `;
+        }
+    };
+
+    window.exportSellCutPDF = function() {
+        if (!window.jspdf) return Swal.fire('خطأ', 'مكتبة PDF غير محملة', 'error');
+        const { jsPDF } = window.jspdf;
+        const doc = new jsPDF('p', 'pt', 'a4');
+        
+        if (window.amiriFont) { 
+            doc.addFileToVFS('Amiri-Regular.ttf', window.amiriFont); 
+            doc.addFont('Amiri-Regular.ttf', 'Amiri', 'normal'); 
+            doc.setFont('Amiri'); 
+        }
+        
+        const data = getData();
+        const year = document.getElementById('sellCutFilterYear').value;
+        const month = document.getElementById('sellCutFilterMonth').value;
+        const date = document.getElementById('sellCutFilterDate').value;
+        
+        let filtered = data.sellCut.filter(s => {
+            const [y, m] = s.date.split('-');
+            return y === year && (month === 'all' || parseInt(m) === parseInt(month)) && (!date || s.date === date);
+        });
+        
+        const now = new Date();
+        const dateStr = now.toLocaleDateString('ar-SA', { year: 'numeric', month: 'long', day: 'numeric' });
+        
+        doc.setFontSize(22); doc.setTextColor(200, 150, 62); doc.text('تقرير عمليات البيع والقص', 297, 40, { align: 'center' });
+        doc.setFontSize(14); doc.setTextColor(100, 100, 100); doc.text('مكتب الرفاه المحاسبي', 297, 55, { align: 'center' });
+        doc.setFontSize(10); doc.text('تاريخ التصدير: ' + dateStr, 550, 70, { align: 'right' });
+        
+        const head = [['التاريخ', 'العميل', 'العملة', 'المبلغ', 'سعر الشراء', 'سعر البيع', 'الربح ($)']];
+        const body = filtered.map(s => [s.date, s.clientName, s.currency, formatNumber(s.amount), s.buyPrice, s.sellPrice, formatNumber(s.profit)]);
+        
+        doc.autoTable({
+            head: head,
+            body: body,
+            startY: 80,
+            theme: 'grid',
+            styles: { font: 'Amiri', fontSize: 10, halign: 'right', cellPadding: 5 },
+            headStyles: { fillColor: [200, 150, 62], textColor: 255, fontStyle: 'bold', halign: 'center' },
+            margin: { left: 40, right: 40 }
+        });
+        
+        const totalProfit = filtered.reduce((sum, s) => sum + s.profit, 0);
+        const finalY = doc.lastAutoTable.finalY + 20;
+        doc.setFontSize(14); doc.setTextColor(200, 150, 62);
+        doc.text(`إجمالي أرباح القص: ${formatNumber(totalProfit)} $`, 550, finalY, { align: 'right' });
+        
+        doc.save(`تقرير_بيع_وقص_${now.toISOString().slice(0, 10)}.pdf`);
+    };
